@@ -1,5 +1,13 @@
 # Read Bin Viewer / Editor
 
+pretty read Binary FILE
+
+USAGE:
+
+```bash
+python read_bin.py <file_path>
+```
+
 ## modes
 
 - view mode
