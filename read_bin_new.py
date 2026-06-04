@@ -9,7 +9,6 @@ from curses import KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PPAGE, KEY_NPAGE, 
 
 IS_WINDOWS = platform.system() == 'Windows'
 
-# 兼容性定义
 if not hasattr(curses, 'KEY_TAB'):
     curses.KEY_TAB = 9
 if not hasattr(curses, 'KEY_ENTER'):
@@ -35,13 +34,13 @@ def get_byte_display(b, mode):
         if b == 0x0d:
             return "\\r"
         if b == 10:
-            return "⏎ "
+            return "\u23ce "
         if b == 0x1b:
             return "\\e"
         if 0x01 <= b <= 0x1f:
             return f"{b:02x}"
         if b == 0x20:
-            return "· "
+            return "\u00b7 "
         if 0x21 <= b <= 0x7e:
             return f"{b:c} "
         if 0x80 <= b <= 0xbf:
@@ -122,9 +121,9 @@ def init_base_colors():
         curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_YELLOWGREEN)
     else:
         curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_GREEN)
-    curses.init_pair(12, curses.COLOR_BLACK, curses.COLOR_YELLOW)   # 普通匹配
-    curses.init_pair(13, curses.COLOR_RED, curses.COLOR_YELLOW)     # 当前选中
-    curses.init_pair(14, curses.COLOR_WHITE, curses.COLOR_RED)      # 编辑光标（红底白字）
+    curses.init_pair(12, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+    curses.init_pair(13, curses.COLOR_RED, curses.COLOR_YELLOW)
+    curses.init_pair(14, curses.COLOR_WHITE, curses.COLOR_RED)
 
 def draw_byte_normal(win, y, x, b, mode):
     if mode == 'ascii':
@@ -133,7 +132,7 @@ def draw_byte_normal(win, y, x, b, mode):
         elif b == 0x0d:
             win.addstr(y, x, "\\r", curses.color_pair(2))
         elif b == 10:
-            win.addstr(y, x, "⏎ ", curses.color_pair(5))
+            win.addstr(y, x, "\u23ce ", curses.color_pair(5))
         elif b == 0x1b:
             win.addstr(y, x, "\\e", curses.color_pair(4))
         elif 0x01 <= b <= 0x1f:
@@ -141,7 +140,7 @@ def draw_byte_normal(win, y, x, b, mode):
             win.addstr(y, x, s[0], curses.color_pair(4))
             win.addstr(y, x+1, s[1], curses.color_pair(4))
         elif b == 0x20:
-            win.addstr(y, x, "· ", curses.color_pair(5))
+            win.addstr(y, x, "\u00b7 ", curses.color_pair(5))
         elif 0x21 <= b <= 0x7e:
             win.addstr(y, x, f"{b:c} ", curses.color_pair(5))
         elif 0x80 <= b <= 0xbf:
@@ -531,18 +530,18 @@ def show_help(stdscr):
         "=== READ_BIN HELP ===",
         "",
         "Navigation (non-search mode):",
-        "  hjkl / ←→↑↓            Move cursor / scroll",
-        "  H / L                   Jump ±16 packs",
-        "  J / K                   Scroll one screen",
-        "  PGUP / PGDN             Scroll half screen",
-        "  HOME                    Go to first pack",
-        "  g                       Go to pack (hex input)",
+        "  hjkl / arrows            Move cursor / scroll",
+        "  H / L                    Jump +-16 packs",
+        "  J / K                    Scroll one screen",
+        "  PGUP / PGDN              Scroll half screen",
+        "  HOME                     Go to first pack",
+        "  g                        Go to pack (hex input)",
         "",
         "Search mode (after pressing f/F):",
-        "  ↑ / ↓ (or j/k)          Navigate matches within current pack",
-        "  ← / → (or h/l)          Jump to global next/prev match",
-        "  O / P                   Jump ±1MB block (next/prev match in that area)",
-        "  H / L                   Jump ±16 packs (find first match in that area)",
+        "  up / down (or j/k)       Navigate matches within current pack",
+        "  left / right (or h/l)    Jump to global next/prev match",
+        "  O / P                    Jump +-1MB block (next/prev match in that area)",
+        "  H / L                    Jump +-16 packs (find first match in that area)",
         "  HOME                    Jump to first match in file",
         "  g                       Jump to pack (hex) and first match there",
         "  ESC                     Clear search highlight",
@@ -553,7 +552,7 @@ def show_help(stdscr):
         "",
         "Edit mode (press i):",
         "  ESC                     Exit edit mode",
-        "  ←→↑↓                    Move cursor (nibble in hex mode, byte in ASCII mode)",
+        "  arrows                  Move cursor (nibble in hex mode, byte in ASCII mode)",
         "  0-9a-fA-F               Edit nibble (hex mode)",
         "  Enter                   Insert newline (\\n, 0x0a)",
         "  Tab                     Insert tab (\\t, 0x09)",
@@ -588,6 +587,42 @@ def show_help(stdscr):
     stdscr.touchwin()
     stdscr.refresh()
 
+def _decode_ansi_escape(stdscr, key):
+    """若 curses keypad 未翻译方向键，手动解析 ANSI 转义序列 \\x1b[..."""
+    if key != 27:
+        return key
+    stdscr.timeout(0)
+    try:
+        c2 = stdscr.getch()
+        if c2 == -1:
+            return key
+        if c2 not in (ord('['), ord('O')):
+            return key
+        c3 = stdscr.getch()
+        if c3 == -1:
+            return key
+        if c2 == ord('['):
+            if c3 == ord('A'): return KEY_UP
+            if c3 == ord('B'): return KEY_DOWN
+            if c3 == ord('C'): return KEY_RIGHT
+            if c3 == ord('D'): return KEY_LEFT
+            if c3 == ord('H'): return KEY_HOME
+            if c3 == ord('5'):
+                c4 = stdscr.getch()
+                if c4 == ord('~'): return KEY_PPAGE
+            if c3 == ord('6'):
+                c4 = stdscr.getch()
+                if c4 == ord('~'): return KEY_NPAGE
+        elif c2 == ord('O'):
+            if c3 == ord('A'): return KEY_UP
+            if c3 == ord('B'): return KEY_DOWN
+            if c3 == ord('C'): return KEY_RIGHT
+            if c3 == ord('D'): return KEY_LEFT
+            if c3 == ord('H'): return KEY_HOME
+        return key
+    finally:
+        stdscr.timeout(-1)
+
 def main(stdscr):
     if len(sys.argv) < 2:
         raise SystemExit(f"Usage: {sys.argv[0]} <filename>")
@@ -615,7 +650,6 @@ def main(stdscr):
     header_colors = init_gradient_colors()
     stdscr.nodelay(False)
 
-    # 搜索状态
     search_accum = None
     search_active = False
     current_pack_ranges = []
@@ -623,12 +657,11 @@ def main(stdscr):
     current_pack_match_idx = -1
     current_global_match_idx = -1
 
-    # 编辑状态
     edit_mode = False
     cursor_byte = 0
     cursor_nibble = 0
     dirty = False
-    undo_map = {}   # {offset: original_byte} 用于放弃修改时恢复
+    undo_map = {}
 
     def refresh_current_pack_display():
         nonlocal current_pack_ranges, current_pack_set, current_pack_match_idx
@@ -780,9 +813,9 @@ def main(stdscr):
             if len(display) > 24:
                 display = display[:24] + "..."
             cur = current_global_match_idx + 1 if current_global_match_idx != -1 else 0
-            status = f"Search: {display} [{cur}/{total}{plus}]  ↑↓: in-pack | ←→: global | ESC clear"
+            status = f"Search: {display} [{cur}/{total}{plus}]  up/dn: in-pack | left/right: global | ESC clear"
         else:
-            status = "hjkl/←→↑↓: move | H/L: ±16 packs | J/K: ±1 screen | PGUP/PGDN: scroll half | O/P: ±1MB | HOME: first | g: goto pack | f: search | F: str | i: edit | m: mode | ?: help | q: quit"
+            status = "hjkl/arrows: move | H/L: +-16p | J/K: +-1scr | PGUP/PGDN: half | O/P: +-1MB | HOME: first | g: goto | f: search | F: str | i: edit | m: mode | ?: help | q: quit"
             if dirty:
                 status = "[MODIFIED] " + status
         try:
@@ -792,8 +825,8 @@ def main(stdscr):
         stdscr.refresh()
 
         key = stdscr.getch()
+        key = _decode_ansi_escape(stdscr, key)
 
-        # 编辑模式处理
         if edit_mode:
             if key == 27:
                 edit_mode = False
@@ -843,21 +876,19 @@ def main(stdscr):
                     if ch in '0123456789abcdefABCDEF':
                         edit_hex_input(ch)
                 continue
-            else:  # ASCII 模式
-                if key == 10 or key == 13:   # Enter
+            else:
+                if key == 10 or key == 13:
                     edit_ascii_input('\n')
-                elif key == 9:               # Tab
+                elif key == 9:
                     edit_ascii_input('\t')
                 elif 32 <= key <= 126:
                     edit_ascii_input(chr(key))
                 continue
 
-        # 帮助
         if key == ord('?'):
             show_help(stdscr)
             continue
 
-        # 搜索导航（当前包内）
         if search_active and key in (KEY_UP, KEY_DOWN, ord('k'), ord('j')):
             if current_pack_ranges:
                 if key in (KEY_UP, ord('k')):
@@ -877,7 +908,6 @@ def main(stdscr):
                         scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows//2))
             continue
 
-        # 全局跨包导航
         if search_active and key in (KEY_LEFT, KEY_RIGHT, ord('h'), ord('l')):
             if key in (KEY_RIGHT, ord('l')):
                 if not jump_to_next_global_match():
@@ -887,7 +917,6 @@ def main(stdscr):
                     show_message(stdscr, "No previous matches", 1)
             continue
 
-        # ESC 清除搜索
         if key == 27:
             if search_active:
                 search_active = False
@@ -898,7 +927,6 @@ def main(stdscr):
                 current_global_match_idx = -1
             continue
 
-        # 常规命令
         if key == ord('q'):
             if dirty:
                 height, width = stdscr.getmaxyx()
@@ -910,16 +938,12 @@ def main(stdscr):
                 win.keypad(True)
                 win.box()
                 win.addstr(1, 2, "Save changes before quitting?")
-                # 显示选项，初始选中 Yes
                 selected = 0
-                # 绘制选项区域
                 win.addstr(2, 2, "[ Yes ]   [ No ]")
-                # 高亮 Yes
                 win.attron(curses.A_REVERSE)
                 win.addstr(2, 3, "Yes")
                 win.attroff(curses.A_REVERSE)
                 win.refresh()
-                # 启用鼠标点击（Windows PDCurses 可能不支持，跳过）
                 if not IS_WINDOWS:
                     old_mask = curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
                 while True:
@@ -929,19 +953,17 @@ def main(stdscr):
                             _, mx, my, _, bstate = curses.getmouse()
                         except curses.error:
                             continue
-                        # 对话框内第2行（绝对坐标 start_y+2）
                         if my == start_y + 2 and (bstate & curses.BUTTON1_CLICKED):
                             rel_x = mx - start_x
-                            if 2 <= rel_x <= 8:   # [ Yes ]
+                            if 2 <= rel_x <= 8:
                                 selected = 0
                                 break
-                            elif 11 <= rel_x <= 15:  # [ No ]
+                            elif 11 <= rel_x <= 15:
                                 selected = 1
                                 break
                     elif c == KEY_LEFT or c == ord('h'):
                         if selected != 0:
                             selected = 0
-                            # 重绘
                             win.addstr(2, 2, "[ Yes ]   [ No ]")
                             win.attron(curses.A_REVERSE)
                             win.addstr(2, 3, "Yes")

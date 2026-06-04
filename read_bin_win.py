@@ -1,26 +1,155 @@
 #!/usr/bin/env python3
+"""
+Windows binary file viewer/editor using ANSI escape sequences and msvcrt.
+All features from read_bin.py adapted for native Windows console.
+"""
 import sys
-import curses
 import os
 import re
 import mmap
-import platform
-from curses import KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PPAGE, KEY_NPAGE, KEY_HOME
-
-IS_WINDOWS = platform.system() == 'Windows'
-
-# 兼容性定义
-if not hasattr(curses, 'KEY_TAB'):
-    curses.KEY_TAB = 9
-if not hasattr(curses, 'KEY_ENTER'):
-    curses.KEY_ENTER = 10
-if not hasattr(curses, 'KEY_RESIZE'):
-    curses.KEY_RESIZE = 410
-if not hasattr(curses, 'KEY_MOUSE'):
-    curses.KEY_MOUSE = 0x199
+import msvcrt
+import ctypes
+import time
 
 FIND_CHUNK_SIZE = 1024 * 1024
 
+# ═══════════════════════════════════════════════════════════════════
+# Enable ANSI escape processing in Windows console
+# ═══════════════════════════════════════════════════════════════════
+def _enable_vt():
+    kernel32 = ctypes.windll.kernel32
+    h = kernel32.GetStdHandle(-11)
+    m = ctypes.c_uint32()
+    if kernel32.GetConsoleMode(h, ctypes.byref(m)):
+        kernel32.SetConsoleMode(h, m.value | 0x0004)
+
+_enable_vt()
+
+# ═══════════════════════════════════════════════════════════════════
+# ANSI helpers
+# ═══════════════════════════════════════════════════════════════════
+def _w(s=''):
+    sys.stdout.write(s)
+    sys.stdout.flush()
+
+def _goto(r, c):
+    _w(f'\033[{r};{c}H')
+
+def _cursor_hide():
+    _w('\033[?25l')
+
+def _cursor_show():
+    _w('\033[?25h')
+
+RST   = '\033[0m'
+BOLD  = '\033[1m'
+REV   = '\033[7m'
+# foreground
+F_RED     = '\033[31m'
+F_GREEN   = '\033[32m'
+F_YELLOW  = '\033[33m'
+F_BLUE    = '\033[34m'
+F_MAGENTA = '\033[35m'
+F_CYAN    = '\033[36m'
+F_WHITE   = '\033[37m'
+F_BLACK   = '\033[30m'
+# background
+B_RED     = '\033[41m'
+B_GREEN   = '\033[42m'
+B_YELLOW  = '\033[43m'
+B_BLUE    = '\033[44m'
+B_MAGENTA = '\033[45m'
+B_CYAN    = '\033[46m'
+B_WHITE   = '\033[47m'
+
+# Combined color codes matching curses color pairs
+C_NULL      = F_RED                                    # null byte
+C_RETURN    = F_WHITE + B_BLUE                         # \r
+C_YELLOW_BG = F_BLACK + B_YELLOW                       # pair 3
+C_CONTROL   = F_BLACK + B_RED                          # control chars
+C_NORMAL    = F_WHITE                                  # printable
+C_CYAN      = F_BLACK + B_CYAN                         # 0x80-0xbf first nibble
+C_BLUE_BG   = F_BLACK + B_BLUE                         # 0x80-0xbf second nibble
+C_MAGENTA1  = F_BLACK + B_MAGENTA                      # high bytes
+C_MAGENTA2  = F_BLACK + B_MAGENTA
+C_GREEN_HEX = F_BLACK + B_GREEN                        # hex printable
+C_GREEN_HEX2= F_BLACK + B_GREEN
+C_MATCH     = F_BLACK + B_YELLOW                       # search match
+C_MATCH_SEL = F_RED + B_YELLOW                         # current match
+C_CURSOR    = F_WHITE + B_RED                          # edit cursor nibble
+
+# ═══════════════════════════════════════════════════════════════════
+# Key constants
+# ═══════════════════════════════════════════════════════════════════
+K_UP    = '__UP__'
+K_DOWN  = '__DOWN__'
+K_LEFT  = '__LEFT__'
+K_RIGHT = '__RIGHT__'
+K_HOME  = '__HOME__'
+K_PGUP  = '__PGUP__'
+K_PGDN  = '__PGDN__'
+K_END   = '__END__'
+K_ESC   = '__ESC__'
+K_TAB   = '__TAB__'
+K_ENTER = '__ENTER__'
+K_RESIZE = '__RESIZE__'
+
+_EXT_MAP = {
+    (0xe0, 72): K_UP,
+    (0xe0, 80): K_DOWN,
+    (0xe0, 75): K_LEFT,
+    (0xe0, 77): K_RIGHT,
+    (0xe0, 71): K_HOME,
+    (0xe0, 73): K_PGUP,
+    (0xe0, 81): K_PGDN,
+    (0xe0, 79): K_END,
+}
+
+# Extended key codes indexed by scan code only (works for both \xe0 and \x00 prefixes)
+_EXT_SCAN_MAP = {
+    72: K_UP, 80: K_DOWN, 75: K_LEFT, 77: K_RIGHT,
+    71: K_HOME, 73: K_PGUP, 81: K_PGDN, 79: K_END,
+}
+# ANSI CSI sequences: \x1b[<code>
+_ANSI_MAP = {
+    65: K_UP, 66: K_DOWN, 67: K_RIGHT, 68: K_LEFT,
+    72: K_HOME, 70: K_END, 53: K_PGUP, 54: K_PGDN,
+}
+
+def read_key():
+    """Read a single key event. Returns a single-char string, a K_* constant, or None."""
+    ch = msvcrt.getch()
+    if ch in (b'\xe0', b'\x00'):
+        ch2 = msvcrt.getch()
+        return _EXT_SCAN_MAP.get(ch2[0])
+    c = ch[0]
+    if c == 27:
+        if msvcrt.kbhit():
+            ch2 = msvcrt.getch()
+            c2 = ch2[0]
+            if c2 == 91 or c2 == 79:  # '[' or 'O' (application mode)
+                if msvcrt.kbhit():
+                    ch3 = msvcrt.getch()
+                    c3 = ch3[0]
+                    if c3 == 53 or c3 == 54:
+                        if msvcrt.kbhit():
+                            msvcrt.getch()
+                    return _ANSI_MAP.get(c3, K_ESC)
+            return K_ESC
+        return K_ESC
+    if c == 9:
+        return K_TAB
+    if c in (10, 13):
+        return K_ENTER
+    if 32 <= c <= 126:
+        return chr(c)
+    if c == 8 or c == 127:
+        return '\x08'
+    return None
+
+# ═══════════════════════════════════════════════════════════════════
+# Utility
+# ═══════════════════════════════════════════════════════════════════
 def format_size(size):
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size < 1024.0:
@@ -29,6 +158,7 @@ def format_size(size):
     return f"{size:.1f}TB"
 
 def get_byte_display(b, mode):
+    """Return plain 2-char string for a byte (no ANSI codes)."""
     if mode == 'ascii':
         if b == 0:
             return ". "
@@ -54,179 +184,113 @@ def get_byte_display(b, mode):
             return f"{b:02x}"
         return f"{b:02x}"
 
-def init_gradient_colors():
-    if not curses.has_colors():
-        return []
-    if IS_WINDOWS or not curses.can_change_color():
-        return [curses.color_pair(2)]
-    start_r, start_g, start_b = 400, 400, 1000
-    end_r, end_g, end_b = 400, 1000, 400
-    steps = 16
-    color_pairs = []
-    for i in range(steps):
-        r = start_r + (end_r - start_r) * i // (steps - 1)
-        g = start_g + (end_g - start_g) * i // (steps - 1)
-        b = start_b + (end_b - start_b) * i // (steps - 1)
-        color_id = 16 + i
-        try:
-            curses.init_color(color_id, r, g, b)
-            curses.init_pair(100 + i, curses.COLOR_BLACK, color_id)
-            color_pairs.append(curses.color_pair(100 + i))
-        except curses.error:
-            color_pairs.append(curses.color_pair(2))
-    return color_pairs
+def ansi_byte(b, mode):
+    """Return ANSI-colored 2-char string for a byte."""
+    if mode == 'ascii':
+        return _ansi_byte_ascii(b)
+    else:
+        return _ansi_byte_hex(b)
 
-def draw_header_with_gradient(win, y, x, text, colors):
+def _ansi_byte_ascii(b):
+    if b == 0:
+        return f'{C_NULL}. {RST}'
+    if b == 0x0d:
+        return f'{C_RETURN}\\r{RST}'
+    if b == 10:
+        return f'{C_NORMAL}⏎ {RST}'
+    if b == 0x1b:
+        return f'{C_CONTROL}\\e{RST}'
+    if 0x01 <= b <= 0x1f:
+        return f'{C_CONTROL}{b:02x}{RST}'
+    if b == 0x20:
+        return f'{C_NORMAL}· {RST}'
+    if 0x21 <= b <= 0x7e:
+        return f'{C_NORMAL}{b:c} {RST}'
+    if 0x80 <= b <= 0xbf:
+        s = f'{b:02x}'
+        return f'{C_CYAN}{s[0]}{C_BLUE_BG}{s[1]}{RST}'
+    s = f'{b:02x}'
+    return f'{C_MAGENTA1}{s[0]}{C_MAGENTA2}{s[1]}{RST}'
+
+def _ansi_byte_hex(b):
+    if b == 0:
+        return f'{C_NULL}. {RST}'
+    s = f'{b:02x}'
+    if 0x20 <= b <= 0x7e:
+        return f'{C_GREEN_HEX}{s[0]}{C_GREEN_HEX2}{s[1]}{RST}'
+    if b == 0x0d:
+        return f'{C_RETURN}{s[0]}{C_RETURN}{s[1]}{RST}'
+    if b == 10:
+        return f'{C_NORMAL}{s[0]}{s[1]}{RST}'
+    if b == 0x1b:
+        return f'{C_CONTROL}{s[0]}{C_CONTROL}{s[1]}{RST}'
+    if 0x01 <= b <= 0x1f:
+        return f'{C_CONTROL}{s[0]}{C_CONTROL}{s[1]}{RST}'
+    if 0x80 <= b <= 0xbf:
+        return f'{C_CYAN}{s[0]}{C_BLUE_BG}{s[1]}{RST}'
+    return f'{C_MAGENTA1}{s[0]}{C_MAGENTA2}{s[1]}{RST}'
+
+def init_gradient_colors():
+    """Return list of ANSI gradient background strings for header."""
+    start_r, start_g, start_b = 102, 102, 255
+    end_r, end_g, end_b = 102, 255, 102
+    steps = 16
+    colors = []
+    for i in range(steps):
+        r = start_r + (end_r - start_r) * i // max(1, steps - 1)
+        g = start_g + (end_g - start_g) * i // max(1, steps - 1)
+        b = start_b + (end_b - start_b) * i // max(1, steps - 1)
+        colors.append(f'\033[48;2;{r};{g};{b}m{F_BLACK}')
+    return colors
+
+def draw_header_with_gradient(text, colors):
+    """Return ANSI-colored header string with gradient."""
     if not colors:
-        win.addstr(y, x, text, curses.color_pair(2))
-        return
+        return f'{C_BLUE_BG}{text}{RST}'
     leading_spaces = 4
     grad_part = text[leading_spaces:]
     grad_len = len(grad_part)
-    if leading_spaces > 0:
-        try:
-            win.addnstr(y, x, text, leading_spaces, curses.color_pair(2))
-        except curses.error:
-            pass
+    result = C_BLUE_BG + text[:leading_spaces]
     for idx, ch in enumerate(grad_part):
-        color_idx = idx * (len(colors) - 1) // max(1, grad_len - 1)
-        color = colors[color_idx]
-        try:
-            win.addch(y, x + leading_spaces + idx, ord(ch), color)
-        except curses.error:
-            pass
+        ci = idx * (len(colors) - 1) // max(1, grad_len - 1)
+        result += colors[ci] + ch
+    result += RST
+    return result
 
-def init_base_colors():
-    if not curses.has_colors():
-        return
-    curses.start_color()
-    try:
-        curses.use_default_colors()
-        default_bg = -1
-    except curses.error:
-        default_bg = curses.COLOR_BLACK
-    curses.init_pair(1, curses.COLOR_RED, default_bg)
-    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_BLUE)
-    curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_YELLOW)
-    curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_RED)
-    if default_bg == -1:
-        curses.init_pair(5, curses.COLOR_WHITE, -1)
-    else:
-        curses.init_pair(5, curses.COLOR_WHITE, default_bg)
-    curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_CYAN)
-    curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_BLUE)
-    curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
-    curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
-    curses.init_pair(10, curses.COLOR_BLACK, curses.COLOR_GREEN)
-    if hasattr(curses, 'COLOR_YELLOWGREEN'):
-        curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_YELLOWGREEN)
-    else:
-        curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_GREEN)
-    curses.init_pair(12, curses.COLOR_BLACK, curses.COLOR_YELLOW)   # 普通匹配
-    curses.init_pair(13, curses.COLOR_RED, curses.COLOR_YELLOW)     # 当前选中
-    curses.init_pair(14, curses.COLOR_WHITE, curses.COLOR_RED)      # 编辑光标（红底白字）
-
-def draw_byte_normal(win, y, x, b, mode):
-    if mode == 'ascii':
-        if b == 0:
-            win.addstr(y, x, ". ", curses.color_pair(1))
-        elif b == 0x0d:
-            win.addstr(y, x, "\\r", curses.color_pair(2))
-        elif b == 10:
-            win.addstr(y, x, "⏎ ", curses.color_pair(5))
-        elif b == 0x1b:
-            win.addstr(y, x, "\\e", curses.color_pair(4))
-        elif 0x01 <= b <= 0x1f:
-            s = f"{b:02x}"
-            win.addstr(y, x, s[0], curses.color_pair(4))
-            win.addstr(y, x+1, s[1], curses.color_pair(4))
-        elif b == 0x20:
-            win.addstr(y, x, "· ", curses.color_pair(5))
-        elif 0x21 <= b <= 0x7e:
-            win.addstr(y, x, f"{b:c} ", curses.color_pair(5))
-        elif 0x80 <= b <= 0xbf:
-            s = f"{b:02x}"
-            win.addstr(y, x, s[0], curses.color_pair(6))
-            win.addstr(y, x+1, s[1], curses.color_pair(7))
-        else:
-            s = f"{b:02x}"
-            win.addstr(y, x, s[0], curses.color_pair(8))
-            win.addstr(y, x+1, s[1], curses.color_pair(9))
-    else:
-        if 0x20 <= b <= 0x7e:
-            s = f"{b:02x}"
-            win.addstr(y, x, s[0], curses.color_pair(10))
-            win.addstr(y, x+1, s[1], curses.color_pair(11))
-        elif b == 0:
-            win.addstr(y, x, ". ", curses.color_pair(1))
-        else:
-            if b == 0x0d:
-                s = f"{b:02x}"
-                win.addstr(y, x, s[0], curses.color_pair(2))
-                win.addstr(y, x+1, s[1], curses.color_pair(2))
-            elif b == 10:
-                s = f"{b:02x}"
-                win.addstr(y, x, s[0], curses.color_pair(5))
-                win.addstr(y, x+1, s[1], curses.color_pair(5))
-            elif b == 0x1b:
-                s = f"{b:02x}"
-                win.addstr(y, x, s[0], curses.color_pair(4))
-                win.addstr(y, x+1, s[1], curses.color_pair(4))
-            elif 0x01 <= b <= 0x1f:
-                s = f"{b:02x}"
-                win.addstr(y, x, s[0], curses.color_pair(4))
-                win.addstr(y, x+1, s[1], curses.color_pair(4))
-            elif 0x80 <= b <= 0xbf:
-                s = f"{b:02x}"
-                win.addstr(y, x, s[0], curses.color_pair(6))
-                win.addstr(y, x+1, s[1], curses.color_pair(7))
-            else:
-                s = f"{b:02x}"
-                win.addstr(y, x, s[0], curses.color_pair(8))
-                win.addstr(y, x+1, s[1], curses.color_pair(9))
-    return x + 2
-
-def draw_pack(win, mm, file_size, pack_size, pack_idx, scroll_top, max_rows, mode,
-              filename, header_colors, matches_set=None, current_match_range=None,
-              edit_mode=False, cursor_byte=None, cursor_nibble=0):
-    win.clear()
-    height, width = win.getmaxyx()
+# ═══════════════════════════════════════════════════════════════════
+# Frame drawing
+# ═══════════════════════════════════════════════════════════════════
+def draw_frame(mm, file_size, pack_size, pack_idx, scroll_top, rows, cols,
+               mode, base_name, header_colors,
+               matches_set=None, current_match_range=None,
+               edit_mode=False, cursor_byte=None, cursor_nibble=0):
+    """Build and write the entire frame to console."""
+    lines = []
     base_offset = pack_idx * pack_size
     data = mm[base_offset:base_offset+pack_size]
 
     size_str = format_size(file_size)
-    try:
-        win.addstr(0, 0, f"{filename}  ({size_str})")
-    except:
-        pass
     total_packs = (file_size + pack_size - 1) // pack_size
     pack_str = f"{pack_idx+1:x} / {total_packs:x}"
     mode_str = "[ASCII]" if mode == 'ascii' else "[HEX]"
     if edit_mode:
         mode_str += " [EDIT]"
-    try:
-        win.addstr(1, 0, f"pack: {pack_str}  {mode_str}")
-    except:
-        pass
-    header_text = "    0 1 2 3 4 5 6 7 8 9 a b c d e f "
-    draw_header_with_gradient(win, 2, 0, header_text, header_colors)
 
+    lines.append(f'{C_NORMAL}{base_name}  ({size_str}){RST}')
+    lines.append(f'{C_NORMAL}pack: {pack_str}  {mode_str}{RST}')
+    header_text = "    0 1 2 3 4 5 6 7 8 9 a b c d e f "
+    lines.append(draw_header_with_gradient(header_text, header_colors))
+
+    max_data_rows = max(0, rows - 4)
     total_rows = (len(data) + 15) // 16
-    if scroll_top > total_rows - max_rows:
-        scroll_top = max(0, total_rows - max_rows)
+    if scroll_top > total_rows - max_data_rows:
+        scroll_top = max(0, total_rows - max_data_rows)
     start_row = scroll_top
-    end_row = min(start_row + max_rows, total_rows)
+    end_row = min(start_row + max_data_rows, total_rows)
 
     for r in range(start_row, end_row):
-        y = 3 + (r - start_row)
-        if y >= height:
-            break
-        try:
-            win.addstr(y, 0, f"{r:02x}  ")
-        except:
-            continue
         offset = r * 16
-        x = 4
+        parts = [f'{F_CYAN}{r:02x}  {RST}']
         for i in range(16):
             byte_off = offset + i
             if byte_off < len(data):
@@ -236,104 +300,83 @@ def draw_pack(win, mm, file_size, pack_size, pack_idx, scroll_top, max_rows, mod
                 if is_cursor:
                     disp = get_byte_display(b, mode)
                     if mode == 'hex' and cursor_nibble == 0:
-                        try:
-                            win.addstr(y, x, disp[0], curses.color_pair(14))
-                            win.addstr(y, x+1, disp[1], curses.color_pair(5))
-                        except:
-                            pass
+                        parts.append(f'{C_CURSOR}{disp[0]}{C_NORMAL}{disp[1]}{RST}')
                     elif mode == 'hex' and cursor_nibble == 1:
-                        try:
-                            win.addstr(y, x, disp[0], curses.color_pair(5))
-                            win.addstr(y, x+1, disp[1], curses.color_pair(14))
-                        except:
-                            pass
+                        parts.append(f'{C_NORMAL}{disp[0]}{C_CURSOR}{disp[1]}{RST}')
                     else:
-                        try:
-                            win.addstr(y, x, disp[0], curses.color_pair(14))
-                            win.addstr(y, x+1, disp[1], curses.color_pair(14))
-                        except:
-                            pass
-                    x += 2
+                        parts.append(f'{C_CURSOR}{disp[0]}{disp[1]}{RST}')
                     continue
                 if current_match_range is not None:
                     start, end = current_match_range
                     if start <= global_off < end:
                         disp = get_byte_display(b, mode)
-                        try:
-                            win.addstr(y, x, disp[0], curses.color_pair(13))
-                            win.addstr(y, x+1, disp[1], curses.color_pair(13))
-                        except:
-                            pass
-                        x += 2
+                        parts.append(f'{C_MATCH_SEL}{disp[0]}{disp[1]}{RST}')
                         continue
                 if matches_set and global_off in matches_set:
                     disp = get_byte_display(b, mode)
-                    try:
-                        win.addstr(y, x, disp[0], curses.color_pair(12))
-                        win.addstr(y, x+1, disp[1], curses.color_pair(12))
-                    except:
-                        pass
-                    x += 2
+                    parts.append(f'{C_MATCH}{disp[0]}{disp[1]}{RST}')
                     continue
-                x = draw_byte_normal(win, y, x, b, mode)
+                parts.append(ansi_byte(b, mode))
             else:
-                try:
-                    win.addstr(y, x, "  ")
-                    x += 2
-                except:
-                    break
-    win.noutrefresh()
+                parts.append('  ')
+        lines.append(''.join(parts))
 
-def input_hex(win, prompt):
-    height, width = win.getmaxyx()
-    if height < 2:
+    _w('\033[H' + '\r\n'.join(lines) + '\033[J')
+    return scroll_top
+
+# ═══════════════════════════════════════════════════════════════════
+# Line input
+# ═══════════════════════════════════════════════════════════════════
+def _line_input(prompt, rows):
+    """Read a line of text at the bottom of console."""
+    _goto(rows, 1)
+    _w('\033[K' + prompt + ' ')
+    _cursor_show()
+    buf = []
+    while True:
+        ch = msvcrt.getwch()
+        if ch == '\r' or ch == '\n':
+            break
+        elif ch == '\x1b':
+            buf.clear()
+            break
+        elif ch == '\x08' or ch == '\x7f':
+            if buf:
+                buf.pop()
+                _w('\b \b')
+        elif ord(ch) >= 32:
+            buf.append(ch)
+            _w(ch)
+    _cursor_hide()
+    _goto(rows, 1)
+    _w('\033[K')
+    line = ''.join(buf)
+    return line if line else None
+
+def input_hex(prompt, rows):
+    val = _line_input(prompt, rows)
+    if val is None:
         return None
-    msg = prompt + " "
-    if len(msg) > width - 1:
-        msg = msg[:width-4] + "..."
-    curses.echo()
+    val = val.strip()
+    if val.lower().startswith('0x'):
+        val = val[2:]
+    val = re.sub(r'[^0-9a-fA-F]', '', val)
+    if not val:
+        return None
     try:
-        win.move(height-1, 0)
-        win.clrtoeol()
-        win.addstr(height-1, 0, msg)
-        win.refresh()
-        s = win.getstr(height-1, len(msg)).decode('utf-8')
-    except curses.error:
-        s = ''
-    finally:
-        curses.noecho()
-    if not s:
-        return None
-    s = s.strip()
-    if s.lower().startswith('0x'):
-        s = s[2:]
-    s = re.sub(r'[^0-9a-fA-F]', '', s)
-    if not s:
-        return None
-    try:
-        return int(s, 16)
+        return int(val, 16)
     except:
         return None
 
-def input_string(win, prompt):
-    height, width = win.getmaxyx()
-    if height < 2:
-        return None
-    msg = prompt + " "
-    if len(msg) > width - 1:
-        msg = msg[:width-4] + "..."
-    curses.echo()
-    try:
-        win.move(height-1, 0)
-        win.clrtoeol()
-        win.addstr(height-1, 0, msg)
-        win.refresh()
-        s = win.getstr(height-1, len(msg)).decode('utf-8')
-    except curses.error:
-        s = ''
-    finally:
-        curses.noecho()
-    return s.strip() if s else None
+def input_string(prompt, rows):
+    return _line_input(prompt, rows)
+
+def show_message(msg, rows, delay=1):
+    _goto(rows, 1)
+    _w('\033[K' + msg)
+    time.sleep(delay)
+    _goto(rows, 1)
+    _w('\033[K')
 
 def compile_advanced_hex_pattern(s):
     s = s.lower()
@@ -371,25 +414,9 @@ def compile_advanced_hex_pattern(s):
     except re.error:
         return None
 
-def input_search(win, prompt):
-    height, width = win.getmaxyx()
-    if height < 2:
-        return None, None, None
-    msg = prompt + " "
-    if len(msg) > width - 1:
-        msg = msg[:width-4] + "..."
-    curses.echo()
-    try:
-        win.move(height-1, 0)
-        win.clrtoeol()
-        win.addstr(height-1, 0, msg)
-        win.refresh()
-        s = win.getstr(height-1, len(msg)).decode('utf-8')
-    except curses.error:
-        s = ''
-    finally:
-        curses.noecho()
-    if not s:
+def input_search(rows):
+    s = _line_input("search hex:", rows)
+    if s is None:
         return None, None, None
     s = s.strip()
     user_input = s
@@ -399,7 +426,7 @@ def input_search(win, prompt):
             regex = re.compile(pattern.encode('latin-1'))
             return 'regex', regex, user_input
         except re.error:
-            show_message(win, f"Invalid regex", 1)
+            show_message("Invalid regex", rows, 1)
             return None, None, None
     hex_test = re.sub(r'\s', '', s)
     if re.fullmatch(r'[0-9a-fA-F]*', hex_test) and len(hex_test) % 2 == 0 and len(hex_test) > 0:
@@ -412,7 +439,7 @@ def input_search(win, prompt):
         if regex:
             return 'regex', regex, user_input
         else:
-            show_message(win, "Invalid advanced hex pattern", 1)
+            show_message("Invalid advanced hex pattern", rows, 1)
             return None, None, None
     def hex_to_byte(m):
         return '\\x' + m.group(1)
@@ -421,20 +448,12 @@ def input_search(win, prompt):
         regex = re.compile(conv.encode('latin-1'))
         return 'regex', regex, user_input
     except re.error:
-        show_message(win, "Invalid regex", 1)
+        show_message("Invalid regex", rows, 1)
         return None, None, None
 
-def show_message(win, msg, delay=1):
-    height, width = win.getmaxyx()
-    win.move(height-1, 0)
-    win.clrtoeol()
-    win.addstr(height-1, 0, msg[:width-1])
-    win.refresh()
-    curses.napms(delay * 1000)
-    win.move(height-1, 0)
-    win.clrtoeol()
-    win.refresh()
-
+# ═══════════════════════════════════════════════════════════════════
+# SearchAccumulator (same logic as original)
+# ═══════════════════════════════════════════════════════════════════
 class SearchAccumulator:
     def __init__(self, mm, search_type, needle, pack_size, user_pattern):
         self.mm = mm
@@ -525,78 +544,83 @@ class SearchAccumulator:
                     return i
         return -1
 
-def show_help(stdscr):
-    height, width = stdscr.getmaxyx()
+# ═══════════════════════════════════════════════════════════════════
+# Help screen
+# ═══════════════════════════════════════════════════════════════════
+def show_help(rows, cols):
     help_lines = [
         "=== READ_BIN HELP ===",
         "",
         "Navigation (non-search mode):",
-        "  hjkl / ←→↑↓            Move cursor / scroll",
-        "  H / L                   Jump ±16 packs",
-        "  J / K                   Scroll one screen",
-        "  PGUP / PGDN             Scroll half screen",
-        "  HOME                    Go to first pack",
-        "  g                       Go to pack (hex input)",
+        "  hjkl / arrows            Move cursor / scroll",
+        "  H / L                    Jump +-16 packs",
+        "  J / K                    Scroll one screen",
+        "  PGUP / PGDN              Scroll half screen",
+        "  HOME                     Go to first pack",
+        "  g                        Go to pack (hex input)",
         "",
         "Search mode (after pressing f/F):",
-        "  ↑ / ↓ (or j/k)          Navigate matches within current pack",
-        "  ← / → (or h/l)          Jump to global next/prev match",
-        "  O / P                   Jump ±1MB block (next/prev match in that area)",
-        "  H / L                   Jump ±16 packs (find first match in that area)",
-        "  HOME                    Jump to first match in file",
-        "  g                       Jump to pack (hex) and first match there",
-        "  ESC                     Clear search highlight",
+        "  up / down (or j/k)       Nav matches in pack",
+        "  left / right (or h/l)    Jump global prev/next",
+        "  O / P                    Jump +-1MB block",
+        "  H / L                    Jump +-16 packs",
+        "  HOME                     Jump to first match",
+        "  g                        Jump to pack + match",
+        "  ESC                      Clear search highlight",
         "",
         "Search input:",
-        "  f                       Search hex / regex / advanced hex (x/z)",
-        "  F                       Search plain UTF-8 string",
+        "  f                        hex / regex / adv hex",
+        "  F                        plain UTF-8 string",
         "",
         "Edit mode (press i):",
-        "  ESC                     Exit edit mode",
-        "  ←→↑↓                    Move cursor (nibble in hex mode, byte in ASCII mode)",
-        "  0-9a-fA-F               Edit nibble (hex mode)",
-        "  Enter                   Insert newline (\\n, 0x0a)",
-        "  Tab                     Insert tab (\\t, 0x09)",
-        "  any character           Insert byte (ASCII mode)",
+        "  ESC                      Exit edit mode",
+        "  arrows                   Move cursor",
+        "  0-9a-fA-F                Edit nibble (hex mode)",
+        "  Enter                    Insert newline",
+        "  Tab                      Insert tab",
+        "  any character            Insert byte (ASCII)",
         "",
         "Other:",
-        "  m                       Toggle display mode (ASCII / HEX)",
-        "  q                       Quit (with save prompt if modified)",
-        "  ?                       Show this help",
+        "  m                        Toggle ASCII / HEX",
+        "  q                        Quit (save prompt)",
+        "  ?                        Show this help",
         "",
-        "Press any key to close"
+        "Press any key to close",
     ]
-    win_height = len(help_lines) + 2
-    win_width = max(len(line) for line in help_lines) + 4
-    if win_width > width:
-        win_width = width - 2
-    if win_height > height:
-        win_height = height - 2
-    start_y = (height - win_height) // 2
-    start_x = (width - win_width) // 2
-    help_win = curses.newwin(win_height, win_width, start_y, start_x)
-    help_win.box()
-    for idx, line in enumerate(help_lines):
-        try:
-            help_win.addstr(idx + 1, 2, line[:win_width-4])
-        except curses.error:
-            pass
-    help_win.refresh()
-    help_win.getch()
-    help_win.clear()
-    help_win.refresh()
-    stdscr.touchwin()
-    stdscr.refresh()
+    _w('\033[2J\033[H')
+    start = 0
+    per_page = max(1, rows - 3)
+    while True:
+        _w('\033[H')
+        for i in range(start, min(start + per_page, len(help_lines))):
+            line = help_lines[i]
+            _w(f'{F_WHITE}{line}{RST}\033[K\r\n')
+        if start + per_page < len(help_lines):
+            _w(f'{F_YELLOW}-- More ({start+per_page}/{len(help_lines)}) PgDn/Enter continue q quit --{RST}')
+        else:
+            _w(f'{F_YELLOW}-- Press any key to close --{RST}')
+        k = msvcrt.getch()
+        if start + per_page >= len(help_lines):
+            break
+        if k in (b'q', b'Q', b'\x1b'):
+            break
+        if k == b'\xe0':
+            k2 = msvcrt.getch()
+            if k2[0] == 81:
+                start = min(start + per_page, len(help_lines) - 1)
+        elif k in (b'\r', b'\n', b' '):
+            start += per_page
 
-def main(stdscr):
+# ═══════════════════════════════════════════════════════════════════
+# Main
+# ═══════════════════════════════════════════════════════════════════
+def main():
     if len(sys.argv) < 2:
         raise SystemExit(f"Usage: {sys.argv[0]} <filename>")
+
     filename = sys.argv[1]
     fd = os.open(filename, os.O_RDWR | os.O_BINARY)
-    try:
-        mm = mmap.mmap(fd, 0, prot=mmap.PROT_READ|mmap.PROT_WRITE, flags=mmap.MAP_SHARED)
-    except AttributeError:
-        mm = mmap.mmap(fd, 0, access=mmap.ACCESS_WRITE)
+    mm = mmap.mmap(fd, 0, access=mmap.ACCESS_WRITE)
     os.close(fd)
     file_size = len(mm)
     base_name = os.path.basename(filename)
@@ -608,14 +632,10 @@ def main(stdscr):
     current_pack = 0
     scroll_top = 0
     mode = 'ascii'
-
-    curses.curs_set(0)
-    stdscr.keypad(True)
-    init_base_colors()
     header_colors = init_gradient_colors()
-    stdscr.nodelay(False)
+    _cursor_hide()
 
-    # 搜索状态
+    # search state
     search_accum = None
     search_active = False
     current_pack_ranges = []
@@ -623,12 +643,16 @@ def main(stdscr):
     current_pack_match_idx = -1
     current_global_match_idx = -1
 
-    # 编辑状态
+    # edit state
     edit_mode = False
     cursor_byte = 0
     cursor_nibble = 0
     dirty = False
-    undo_map = {}   # {offset: original_byte} 用于放弃修改时恢复
+    undo_map = {}
+
+    def get_term_size():
+        s = os.get_terminal_size()
+        return s.lines, s.columns
 
     def refresh_current_pack_display():
         nonlocal current_pack_ranges, current_pack_set, current_pack_match_idx
@@ -659,9 +683,9 @@ def main(stdscr):
         new_row = offset_in_pack // 16
         data_len = min(pack_size, file_size - new_pack * pack_size)
         total_rows = (data_len + 15) // 16
-        height, _ = stdscr.getmaxyx()
-        max_data_rows = max(0, height - 4)
-        scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows//2))
+        rows, _ = get_term_size()
+        max_data_rows = max(0, rows - 4)
+        scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows // 2))
         current_pack = new_pack
         refresh_current_pack_display()
         return True
@@ -694,8 +718,8 @@ def main(stdscr):
             current_pack = pack_of_cursor
         offset_in_pack = cursor_byte % pack_size
         row_of_cursor = offset_in_pack // 16
-        height, _ = stdscr.getmaxyx()
-        max_data_rows = max(0, height - 4)
+        rows, _ = get_term_size()
+        max_data_rows = max(0, rows - 4)
         if row_of_cursor < scroll_top:
             scroll_top = row_of_cursor
         elif row_of_cursor >= scroll_top + max_data_rows:
@@ -752,20 +776,25 @@ def main(stdscr):
             cursor_byte = file_size - 1
         ensure_cursor_visible()
 
+    prev_rows, prev_cols = get_term_size()
+
+    # ── Main loop ──
     while True:
-        height, width = stdscr.getmaxyx()
-        max_data_rows = max(0, height - 4)
+        rows, cols = get_term_size()
+        if rows != prev_rows or cols != prev_cols:
+            prev_rows, prev_cols = rows, cols
+        max_data_rows = max(0, rows - 4)
 
         current_match_range = None
         if search_active and search_accum and current_global_match_idx != -1:
             if current_global_match_idx < len(search_accum.match_ranges):
                 current_match_range = search_accum.match_ranges[current_global_match_idx]
 
-        draw_pack(stdscr, mm, file_size, pack_size, current_pack, scroll_top, max_data_rows,
-                  mode, base_name, header_colors,
-                  current_pack_set if search_active else None,
-                  current_match_range,
-                  edit_mode, cursor_byte, cursor_nibble)
+        scroll_top = draw_frame(mm, file_size, pack_size, current_pack, scroll_top,
+                                rows, cols, mode, base_name, header_colors,
+                                current_pack_set if search_active else None,
+                                current_match_range,
+                                edit_mode, cursor_byte, cursor_nibble)
 
         status = ""
         if edit_mode:
@@ -780,26 +809,26 @@ def main(stdscr):
             if len(display) > 24:
                 display = display[:24] + "..."
             cur = current_global_match_idx + 1 if current_global_match_idx != -1 else 0
-            status = f"Search: {display} [{cur}/{total}{plus}]  ↑↓: in-pack | ←→: global | ESC clear"
+            status = f"Search: {display} [{cur}/{total}{plus}]  up/dn: in-pack | left/right: global | ESC clear"
         else:
-            status = "hjkl/←→↑↓: move | H/L: ±16 packs | J/K: ±1 screen | PGUP/PGDN: scroll half | O/P: ±1MB | HOME: first | g: goto pack | f: search | F: str | i: edit | m: mode | ?: help | q: quit"
+            status = "hjkl/arrows: move | H/L: +-16p | J/K: +-scr | PGUP/PGDN: half-scr | O/P: +-1MB | HOME: first | g: goto | f: search | F: str | i: edit | m: mode | ?: help | q: quit"
             if dirty:
                 status = "[MODIFIED] " + status
-        try:
-            stdscr.addstr(height-1, 0, status[:width-1], curses.color_pair(5))
-        except:
-            pass
-        stdscr.refresh()
 
-        key = stdscr.getch()
+        _goto(rows, 1)
+        _w('\033[K' + C_NORMAL + status[:cols-1] + RST if status else '')
 
-        # 编辑模式处理
+        key = read_key()
+
+        # ── Edit mode ──
         if edit_mode:
-            if key == 27:
+            if key == K_ESC:
                 edit_mode = False
-                curses.curs_set(0)
+                _cursor_hide()
+                _goto(rows, 1)
+                _w('\033[K')
                 continue
-            elif key == KEY_LEFT or key == ord('h'):
+            elif key == K_LEFT:
                 if mode == 'ascii':
                     if cursor_byte > 0:
                         cursor_byte -= 1
@@ -812,7 +841,7 @@ def main(stdscr):
                         cursor_nibble = 0
                 ensure_cursor_visible()
                 continue
-            elif key == KEY_RIGHT or key == ord('l'):
+            elif key == K_RIGHT:
                 if mode == 'ascii':
                     if cursor_byte + 1 < file_size:
                         cursor_byte += 1
@@ -825,42 +854,40 @@ def main(stdscr):
                             cursor_nibble = 0
                 ensure_cursor_visible()
                 continue
-            elif key == KEY_UP or key == ord('k'):
+            elif key == K_UP:
                 new_byte = cursor_byte - 16
                 if new_byte >= 0:
                     cursor_byte = new_byte
                 ensure_cursor_visible()
                 continue
-            elif key == KEY_DOWN or key == ord('j'):
+            elif key == K_DOWN:
                 new_byte = cursor_byte + 16
                 if new_byte < file_size:
                     cursor_byte = new_byte
                 ensure_cursor_visible()
                 continue
             elif mode == 'hex':
-                if 32 <= key <= 126:
-                    ch = chr(key)
-                    if ch in '0123456789abcdefABCDEF':
-                        edit_hex_input(ch)
+                if isinstance(key, str) and len(key) == 1 and key in '0123456789abcdefABCDEF':
+                    edit_hex_input(key)
                 continue
-            else:  # ASCII 模式
-                if key == 10 or key == 13:   # Enter
+            else:
+                if key == K_ENTER:
                     edit_ascii_input('\n')
-                elif key == 9:               # Tab
+                elif key == K_TAB:
                     edit_ascii_input('\t')
-                elif 32 <= key <= 126:
-                    edit_ascii_input(chr(key))
+                elif isinstance(key, str) and len(key) == 1 and '\x20' <= key <= '\x7e':
+                    edit_ascii_input(key)
                 continue
 
-        # 帮助
-        if key == ord('?'):
-            show_help(stdscr)
+        # ── Help ──
+        if key == '?':
+            show_help(rows, cols)
             continue
 
-        # 搜索导航（当前包内）
-        if search_active and key in (KEY_UP, KEY_DOWN, ord('k'), ord('j')):
+        # ── Search navigation (within pack) ──
+        if search_active and key in (K_UP, K_DOWN, 'k', 'j'):
             if current_pack_ranges:
-                if key in (KEY_UP, ord('k')):
+                if key in (K_UP, 'k'):
                     new_idx = (current_pack_match_idx - 1) % len(current_pack_ranges)
                 else:
                     new_idx = (current_pack_match_idx + 1) % len(current_pack_ranges)
@@ -874,21 +901,23 @@ def main(stdscr):
                         new_row = offset_in_pack // 16
                         data_len = min(pack_size, file_size - current_pack * pack_size)
                         total_rows = (data_len + 15) // 16
-                        scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows//2))
+                        rows, _ = get_term_size()
+                        max_data_rows = max(0, rows - 4)
+                        scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows // 2))
             continue
 
-        # 全局跨包导航
-        if search_active and key in (KEY_LEFT, KEY_RIGHT, ord('h'), ord('l')):
-            if key in (KEY_RIGHT, ord('l')):
+        # ── Global match navigation ──
+        if search_active and key in (K_LEFT, K_RIGHT, 'h', 'l'):
+            if key in (K_RIGHT, 'l'):
                 if not jump_to_next_global_match():
-                    show_message(stdscr, "No more matches", 1)
+                    show_message("No more matches", rows, 1)
             else:
                 if not jump_to_prev_global_match():
-                    show_message(stdscr, "No previous matches", 1)
+                    show_message("No previous matches", rows, 1)
             continue
 
-        # ESC 清除搜索
-        if key == 27:
+        # ── ESC clear ──
+        if key == K_ESC:
             if search_active:
                 search_active = False
                 search_accum = None
@@ -898,81 +927,39 @@ def main(stdscr):
                 current_global_match_idx = -1
             continue
 
-        # 常规命令
-        if key == ord('q'):
+        # ── Normal commands ──
+        if key == 'q':
             if dirty:
-                height, width = stdscr.getmaxyx()
-                dialog_width = 40
-                dialog_height = 5
-                start_y = (height - dialog_height) // 2
-                start_x = (width - dialog_width) // 2
-                win = curses.newwin(dialog_height, dialog_width, start_y, start_x)
-                win.keypad(True)
-                win.box()
-                win.addstr(1, 2, "Save changes before quitting?")
-                # 显示选项，初始选中 Yes
-                selected = 0
-                # 绘制选项区域
-                win.addstr(2, 2, "[ Yes ]   [ No ]")
-                # 高亮 Yes
-                win.attron(curses.A_REVERSE)
-                win.addstr(2, 3, "Yes")
-                win.attroff(curses.A_REVERSE)
-                win.refresh()
-                # 启用鼠标点击（Windows PDCurses 可能不支持，跳过）
-                if not IS_WINDOWS:
-                    old_mask = curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+                # quit dialog
+                selected = 0  # 0=Yes, 1=No
                 while True:
-                    c = win.getch()
-                    if not IS_WINDOWS and c == curses.KEY_MOUSE:
-                        try:
-                            _, mx, my, _, bstate = curses.getmouse()
-                        except curses.error:
-                            continue
-                        # 对话框内第2行（绝对坐标 start_y+2）
-                        if my == start_y + 2 and (bstate & curses.BUTTON1_CLICKED):
-                            rel_x = mx - start_x
-                            if 2 <= rel_x <= 8:   # [ Yes ]
-                                selected = 0
-                                break
-                            elif 11 <= rel_x <= 15:  # [ No ]
-                                selected = 1
-                                break
-                    elif c == KEY_LEFT or c == ord('h'):
-                        if selected != 0:
-                            selected = 0
-                            # 重绘
-                            win.addstr(2, 2, "[ Yes ]   [ No ]")
-                            win.attron(curses.A_REVERSE)
-                            win.addstr(2, 3, "Yes")
-                            win.attroff(curses.A_REVERSE)
-                            win.refresh()
-                    elif c == KEY_RIGHT or c == ord('l'):
-                        if selected != 1:
-                            selected = 1
-                            win.addstr(2, 2, "[ Yes ]   [ No ]")
-                            win.attron(curses.A_REVERSE)
-                            win.addstr(2, 12, "No")
-                            win.attroff(curses.A_REVERSE)
-                            win.refresh()
-                    elif c == ord('y') or c == ord('Y'):
+                    _goto(rows, 1)
+                    _w(f'\033[K{REV} Save changes before quitting? [ Yes ] [ No ]{RST} {REV}←→ select Enter confirm{RST}')
+                    c = read_key()
+                    if c == K_LEFT or c == 'h':
+                        selected = 0
+                        _goto(rows, 1)
+                        _w(f'\033[K Save changes before quitting? {REV}[ Yes ]{RST} [ No ]          ')
+                    elif c == K_RIGHT or c == 'l':
+                        selected = 1
+                        _goto(rows, 1)
+                        _w(f'\033[K Save changes before quitting? [ Yes ] {REV}[ No ]{RST}          ')
+                    elif c == 'y' or c == 'Y':
                         selected = 0
                         break
-                    elif c == ord('n') or c == ord('N'):
+                    elif c == 'n' or c == 'N':
                         selected = 1
                         break
-                    elif c in (10, 13, ord(' ')):
+                    elif c == K_ENTER or c == ' ':
                         break
-                    elif c == 27:
+                    elif c == K_ESC:
                         selected = 1
                         break
-                if not IS_WINDOWS:
-                    curses.mousemask(old_mask[1])
-                win.clear()
-                win.refresh()
+                _goto(rows, 1)
+                _w('\033[K')
                 if selected == 0:
                     mm.flush()
-                    show_message(stdscr, "Saved.", 1)
+                    show_message("Saved.", rows, 1)
                 else:
                     for off, orig in undo_map.items():
                         mm[off] = orig
@@ -982,29 +969,29 @@ def main(stdscr):
                 break
             else:
                 break
-        elif key == KEY_UP or key == ord('k'):
+        elif key == K_UP or key == 'k':
             if scroll_top > 0:
                 scroll_top -= 1
-        elif key == KEY_DOWN or key == ord('j'):
+        elif key == K_DOWN or key == 'j':
             data_len = min(pack_size, file_size - current_pack * pack_size)
             total_rows = (data_len + 15) // 16
             if scroll_top + max_data_rows < total_rows:
                 scroll_top += 1
-        elif key == KEY_LEFT or key == ord('h'):
+        elif key == K_LEFT or key == 'h':
             if not search_active and current_pack > 0:
                 current_pack -= 1
                 scroll_top = 0
-        elif key == KEY_RIGHT or key == ord('l'):
+        elif key == K_RIGHT or key == 'l':
             if not search_active and current_pack + 1 < total_packs:
                 current_pack += 1
                 scroll_top = 0
-        elif key == ord('K'):
+        elif key == 'K':
             scroll_top = max(0, scroll_top - max_data_rows)
-        elif key == ord('J'):
+        elif key == 'J':
             data_len = min(pack_size, file_size - current_pack * pack_size)
             total_rows = (data_len + 15) // 16
             scroll_top = min(total_rows - max_data_rows, scroll_top + max_data_rows)
-        elif key == ord('H'):
+        elif key == 'H':
             target_pack = max(0, current_pack - 16)
             if search_active:
                 target_offset = target_pack * pack_size
@@ -1012,11 +999,11 @@ def main(stdscr):
                 if idx != -1:
                     jump_to_global_match(idx)
                 else:
-                    show_message(stdscr, "No match in previous 16 packs", 1)
+                    show_message("No match in previous 16 packs", rows, 1)
             else:
                 current_pack = target_pack
                 scroll_top = 0
-        elif key == ord('L'):
+        elif key == 'L':
             target_pack = min(total_packs - 1, current_pack + 16)
             if search_active:
                 target_offset = target_pack * pack_size
@@ -1024,19 +1011,19 @@ def main(stdscr):
                 if idx != -1:
                     jump_to_global_match(idx)
                 else:
-                    show_message(stdscr, "No match in next 16 packs", 1)
+                    show_message("No match in next 16 packs", rows, 1)
             else:
                 current_pack = target_pack
                 scroll_top = 0
-        elif key == KEY_PPAGE:
+        elif key == K_PGUP:
             step = max(1, max_data_rows // 2)
             scroll_top = max(0, scroll_top - step)
-        elif key == KEY_NPAGE:
+        elif key == K_PGDN:
             step = max(1, max_data_rows // 2)
             data_len = min(pack_size, file_size - current_pack * pack_size)
             total_rows = (data_len + 15) // 16
             scroll_top = min(total_rows - max_data_rows, scroll_top + step)
-        elif key == ord('O') or key == ord('o'):
+        elif key == 'O' or key == 'o':
             if search_active:
                 current_offset = current_pack * pack_size + scroll_top * 16
                 new_min = max(0, current_offset - FIND_CHUNK_SIZE)
@@ -1047,13 +1034,13 @@ def main(stdscr):
                     elif new_min <= search_accum.match_ranges[idx][0] < current_offset:
                         jump_to_global_match(idx)
                     else:
-                        show_message(stdscr, "No previous match in 1MB block", 1)
+                        show_message("No previous match in 1MB block", rows, 1)
                 else:
-                    show_message(stdscr, "No previous match in 1MB block", 1)
+                    show_message("No previous match in 1MB block", rows, 1)
             else:
                 current_pack = max(0, current_pack - 256)
                 scroll_top = 0
-        elif key == ord('P') or key == ord('p'):
+        elif key == 'P' or key == 'p':
             if search_active:
                 current_offset = current_pack * pack_size + scroll_top * 16
                 new_min = current_offset + FIND_CHUNK_SIZE
@@ -1061,31 +1048,31 @@ def main(stdscr):
                 if idx != -1:
                     jump_to_global_match(idx)
                 else:
-                    show_message(stdscr, "No match in next 1MB block", 1)
+                    show_message("No match in next 1MB block", rows, 1)
             else:
                 current_pack = min(total_packs - 1, current_pack + 256)
                 scroll_top = 0
-        elif key == KEY_HOME:
+        elif key == K_HOME:
             if search_active:
                 idx = search_accum.find_next_match_after_offset(0)
                 if idx != -1:
                     jump_to_global_match(idx)
                 else:
-                    show_message(stdscr, "No match at beginning", 1)
+                    show_message("No match at beginning", rows, 1)
             else:
                 current_pack = 0
                 scroll_top = 0
-        elif key == ord('i'):
+        elif key == 'i':
             edit_mode = True
-            curses.curs_set(2)
+            _cursor_show()
             if cursor_byte == 0 and not dirty:
                 cursor_byte = current_pack * pack_size + scroll_top * 16
             ensure_cursor_visible()
             continue
-        elif key == ord('m'):
+        elif key == 'm':
             mode = 'hex' if mode == 'ascii' else 'ascii'
-        elif key == ord('g'):
-            val = input_hex(stdscr, "Go to pack (hex):")
+        elif key == 'g':
+            val = input_hex("Go to pack (hex):", rows)
             if val is not None:
                 target = val - 1
                 if 0 <= target < total_packs:
@@ -1095,14 +1082,14 @@ def main(stdscr):
                         if idx != -1:
                             jump_to_global_match(idx)
                         else:
-                            show_message(stdscr, "No match in that pack", 1)
+                            show_message(f"No match in that pack", rows, 1)
                     else:
                         current_pack = target
                         scroll_top = 0
                 else:
-                    show_message(stdscr, f"Invalid pack: {hex(val)} (max {hex(total_packs)})", 1)
-        elif key == ord('f'):
-            typ, data, user_input = input_search(stdscr, "search hex:")
+                    show_message(f"Invalid pack: {hex(val)} (max {hex(total_packs)})", rows, 1)
+        elif key == 'f':
+            typ, data, user_input = input_search(rows)
             if typ is None:
                 continue
             acc = SearchAccumulator(mm, typ, data, pack_size, user_input)
@@ -1118,13 +1105,15 @@ def main(stdscr):
                 new_row = offset_in_pack // 16
                 data_len = min(pack_size, file_size - new_pack * pack_size)
                 total_rows = (data_len + 15) // 16
-                scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows//2))
+                rows, _ = get_term_size()
+                max_data_rows = max(0, rows - 4)
+                scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows // 2))
                 current_pack = new_pack
                 refresh_current_pack_display()
             else:
-                show_message(stdscr, "No match found in first 1MB block", 1)
-        elif key == ord('F'):
-            s = input_string(stdscr, "Search STR:")
+                show_message("No match found in first 1MB block", rows, 1)
+        elif key == 'F':
+            s = input_string("Search STR:", rows)
             if s:
                 acc = SearchAccumulator(mm, 'hex', s.encode('utf-8'), pack_size, f'"{s}"')
                 start_offset = current_pack * pack_size + scroll_top * 16
@@ -1139,15 +1128,30 @@ def main(stdscr):
                     new_row = offset_in_pack // 16
                     data_len = min(pack_size, file_size - new_pack * pack_size)
                     total_rows = (data_len + 15) // 16
-                    scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows//2))
+                    rows, _ = get_term_size()
+                    max_data_rows = max(0, rows - 4)
+                    scroll_top = max(0, min(total_rows - max_data_rows, new_row - max_data_rows // 2))
                     current_pack = new_pack
                     refresh_current_pack_display()
                 else:
-                    show_message(stdscr, "No match found in first 1MB block", 1)
-        elif key == curses.KEY_RESIZE:
-            continue
+                    show_message("No match found in first 1MB block", rows, 1)
 
     mm.close()
+    _cursor_show()
+    _w('\033[2J\033[H')
 
 if __name__ == "__main__":
-    curses.wrapper(main)
+    try:
+        main()
+    except KeyboardInterrupt:
+        _cursor_show()
+        _w('\033[2J\033[H')
+        sys.exit(0)
+    except Exception as e:
+        _cursor_show()
+        _w('\033[0m\033[2J\033[H')
+        sys.stdout.flush()
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
