@@ -1,0 +1,16 @@
+null:      { fg: white, bg: red }
+control:   { fg: white, bg: blue }
+blank:     { fg: black, bg: cyan }
+ascii:     { fg: null }
+hex:       { fg: black, bg: green }
+head2:     { fg: white, bg: blue }
+head3:     { fg: white, bg: magenta }
+head4:     { fg: white, bg: red }
+tail:      { fg: black, bg: yellow }
+unknown:   { fg: white, bg: red }
+cursor:    { fg: black, bg: yellow }
+selection: { fg: yellow, bg: green }
+found:     { fg: black, bg: yellow }
+
+dim:
+  global: 0.8

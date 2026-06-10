@@ -1,0 +1,18 @@
+null:      { fg: white, bg: [160,20,20] }
+control:   { fg: white, bg: [20,20,120] }
+blank:     { fg: black, bg: [120,180,220] }
+ascii:     {}
+hex:       { fg: black, bg: [45,160,70] }
+head2:     { fg: white, bg: [20,110,140] }
+head3:     { fg: white, bg: [110,50,160] }
+head4:     { fg: white, bg: [160,60,110] }
+tail:      { fg: black, bg: [180,160,40] }
+unknown:   { fg: white, bg: [160,20,20] }
+cursor:    { fg: black, bg: [255,255,80] }
+selection: { fg: yellow, bg: [0,120,0] }
+
+dim:
+  global: 0.8
+  overrides:
+    "[45,160,70]":  0.7
+    "[160,60,110]": 0.85

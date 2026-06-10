@@ -44,6 +44,12 @@ pub enum InputMode {
     Help,
 }
 
+pub struct UndoEntry {
+    pub offset: usize,
+    pub old: u8,
+    pub new: u8,
+}
+
 pub struct App {
     pub file_size: usize,
     pub pack_size: usize,
@@ -59,6 +65,10 @@ pub struct App {
     pub cursor_byte: usize,
     pub cursor_nibble: usize,
     pub dirty: bool,
+
+    // Undo/redo
+    pub undo_stack: Vec<UndoEntry>,
+    pub redo_stack: Vec<UndoEntry>,
 
     // Search state
     pub search: Option<SearchAccumulator>,
@@ -93,6 +103,8 @@ impl App {
             cursor_byte: 0,
             cursor_nibble: 0,
             dirty: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             search: None,
             search_active: false,
             pack_ranges: Vec::new(),
@@ -214,8 +226,34 @@ impl App {
 
     pub fn modify_byte(&mut self, mmap: &mut [u8], offset: usize, value: u8) {
         if offset < self.file_size && mmap[offset] != value {
+            self.undo_stack.push(UndoEntry {
+                offset,
+                old: mmap[offset],
+                new: value,
+            });
+            self.redo_stack.clear();
             mmap[offset] = value;
             self.dirty = true;
+        }
+    }
+
+    pub fn undo(&mut self, mmap: &mut [u8]) {
+        if let Some(entry) = self.undo_stack.pop() {
+            if entry.offset < self.file_size {
+                mmap[entry.offset] = entry.old;
+                self.redo_stack.push(entry);
+                self.dirty = !self.undo_stack.is_empty();
+            }
+        }
+    }
+
+    pub fn redo(&mut self, mmap: &mut [u8]) {
+        if let Some(entry) = self.redo_stack.pop() {
+            if entry.offset < self.file_size {
+                mmap[entry.offset] = entry.new;
+                self.undo_stack.push(entry);
+                self.dirty = true;
+            }
         }
     }
 

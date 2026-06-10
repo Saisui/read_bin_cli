@@ -7,7 +7,7 @@ use std::fs::OpenOptions;
 use std::io;
 
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -84,8 +84,8 @@ fn main() -> io::Result<()> {
 
     enable_raw_mode().map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode failed: {}", e)))?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)
-        .map_err(|e| io::Error::new(e.kind(), format!("EnterAlternateScreen failed: {}", e)))?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+        .map_err(|e| io::Error::new(e.kind(), format!("EnterAlternateScreen/EnableMouseCapture failed: {}", e)))?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)
         .map_err(|e| io::Error::new(e.kind(), format!("Terminal::new failed: {}", e)))?;
@@ -101,7 +101,7 @@ fn main() -> io::Result<()> {
     let result = run(&mut terminal, &mut app, &mut mmap);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     // Drop mmap before potentially flushing
@@ -230,181 +230,41 @@ fn run(
         })?;
 
         // Handle input
-        if let Event::Key(key) = event::read()? {
-            match app.input_mode {
-                InputMode::Help => {
-                    app.input_mode = InputMode::Normal;
-                }
-                InputMode::SaveConfirm => {
-                    match key.code {
-                        KeyCode::Left | KeyCode::Char('h') => app.save_selected = true,
-                        KeyCode::Right | KeyCode::Char('l') => app.save_selected = false,
-                        KeyCode::Char('y') | KeyCode::Char('Y') => {
-                            app.save_selected = true;
-                            break;
+        let evt = event::read()?;
+        match evt {
+            Event::Mouse(mouse) => {
+                if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                    let mx = mouse.column as usize;
+                    let my = mouse.row as usize;
+                    if my >= 3 && mx >= 4 {
+                        let row = my - 3 + app.scroll_top;
+                        let col = mx - 4;
+                        let byte_col = col / 2;
+                        if byte_col < 16 {
+                            let offset = app.current_pack * app.pack_size + row * 16 + byte_col;
+                            if offset < app.file_size {
+                                app.cursor_byte = offset;
+                                if app.input_mode != InputMode::Edit {
+                                    app.input_mode = InputMode::Edit;
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
                         }
-                        KeyCode::Char('n') | KeyCode::Char('N') => {
-                            app.save_selected = false;
-                            break;
-                        }
-                        KeyCode::Enter | KeyCode::Char(' ') => break,
-                        KeyCode::Esc => {
-                            app.save_selected = false;
-                            break;
-                        }
-                        _ => {}
                     }
                 }
-                InputMode::SearchInput | InputMode::StringSearchInput | InputMode::GotoInput => {
+            }
+            Event::Key(key) => {
+                // Global Ctrl shortcuts
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
                     match key.code {
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                            app.input_buf.clear();
+                        KeyCode::Char('z') => {
+                            app.undo(&mut *mmap);
+                            continue;
                         }
-                        KeyCode::Enter => {
-                            let buf = app.input_buf.clone();
-                            let _prompt = app.input_prompt.clone();
-                            let mode = app.input_mode;
-                            app.input_mode = InputMode::Normal;
-                            app.input_buf.clear();
-
-                            if mode == InputMode::GotoInput {
-                                if let Some(val) = parse_hex_input(&buf) {
-                                    let target = val.saturating_sub(1);
-                                    if target < app.total_packs {
-                                        if app.search_active {
-                                            let offset = target * app.pack_size;
-                                            if let Some(ref mut search) = app.search {
-                                                if let Some(idx) =
-                                                    search.find_next_match_after_offset(&*mmap, offset)
-                                                {
-                                                    app.jump_to_global_match(idx);
-                                                }
-                                            }
-                                        } else {
-                                            app.current_pack = target;
-                                            app.scroll_top = 0;
-                                        }
-                                    }
-                                }
-                            } else if mode == InputMode::StringSearchInput {
-                                if let Some((label, bytes)) = search::parse_string_search(&buf) {
-                                    app.do_search(
-                                        &*mmap,
-                                        false,
-                                        bytes,
-                                        None,
-                                        label,
-                                        term_h,
-                                    );
-                                }
-                            } else {
-                                // SearchInput
-                                if let Some((label, is_regex, bytes, regex)) =
-                                    search::parse_search_input(&buf)
-                                {
-                                    app.do_search(
-                                        &*mmap,
-                                        is_regex,
-                                        bytes,
-                                        regex,
-                                        label,
-                                        term_h,
-                                    );
-                                }
-                            }
+                        KeyCode::Char('y') => {
+                            app.redo(&mut *mmap);
+                            continue;
                         }
-                        KeyCode::Backspace => {
-                            app.input_buf.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.input_buf.push(c);
-                        }
-                        _ => {}
-                    }
-                }
-                InputMode::Edit => {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                        }
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            if app.mode == DisplayMode::Ascii || app.mode == DisplayMode::Utf8 {
-                                if app.cursor_byte > 0 {
-                                    app.cursor_byte -= 1;
-                                }
-                            } else if app.cursor_nibble == 0 {
-                                if app.cursor_byte > 0 {
-                                    app.cursor_byte -= 1;
-                                    app.cursor_nibble = 1;
-                                }
-                            } else {
-                                app.cursor_nibble = 0;
-                            }
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            if app.mode == DisplayMode::Ascii || app.mode == DisplayMode::Utf8 {
-                                if app.cursor_byte + 1 < app.file_size {
-                                    app.cursor_byte += 1;
-                                }
-                            } else if app.cursor_nibble == 0 {
-                                app.cursor_nibble = 1;
-                            } else {
-                                if app.cursor_byte + 1 < app.file_size {
-                                    app.cursor_byte += 1;
-                                    app.cursor_nibble = 0;
-                                }
-                            }
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            let new = app.cursor_byte.saturating_sub(16);
-                            app.cursor_byte = new;
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            let new = app.cursor_byte + 16;
-                            if new < app.file_size {
-                                app.cursor_byte = new;
-                            }
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        KeyCode::Enter => {
-                            if app.mode == DisplayMode::Ascii {
-                                app.edit_ascii_input(&mut *mmap, '\n');
-                            }
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        KeyCode::Tab => {
-                            if app.mode == DisplayMode::Ascii {
-                                app.edit_ascii_input(&mut *mmap, '\t');
-                            }
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        KeyCode::Char(c) => {
-                            if app.mode == DisplayMode::Hex {
-                                if c.is_ascii_hexdigit() {
-                                    app.edit_hex_input(&mut *mmap, c);
-                                }
-                            } else {
-                                app.edit_ascii_input(&mut *mmap, c);
-                            }
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        _ => {}
-                    }
-                }
-                InputMode::Normal => {
-                    // ESC: clear search
-                    if key.code == KeyCode::Esc {
-                        if app.search_active {
-                            app.clear_search();
-                        }
-                        continue;
-                    }
-
-                    match key.code {
                         KeyCode::Char('q') => {
                             if app.dirty {
                                 app.input_mode = InputMode::SaveConfirm;
@@ -412,178 +272,353 @@ fn run(
                             } else {
                                 break;
                             }
-                        }
-                        KeyCode::Char('?') => {
-                            app.input_mode = InputMode::Help;
-                        }
-                        KeyCode::Char('m') => {
-                            app.mode = app.mode.next();
-                        }
-                        KeyCode::Char('i') => {
-                            app.input_mode = InputMode::Edit;
-                            if app.cursor_byte == 0 && !app.dirty {
-                                app.cursor_byte =
-                                    app.current_pack * app.pack_size + app.scroll_top * 16;
-                            }
-                            app.ensure_cursor_visible(term_h);
-                        }
-                        KeyCode::Char('g') => {
-                            app.input_mode = InputMode::GotoInput;
-                            app.input_prompt = "Go to pack (hex):".into();
-                            app.input_buf.clear();
-                        }
-                        KeyCode::Char('f') => {
-                            app.input_mode = InputMode::SearchInput;
-                            app.input_prompt = "search hex:".into();
-                            app.input_buf.clear();
-                        }
-                        KeyCode::Char('F') => {
-                            app.input_mode = InputMode::StringSearchInput;
-                            app.input_prompt = "Search STR:".into();
-                            app.input_buf.clear();
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if app.search_active {
-                                navigate_pack_match(app, -1);
-                            } else {
-                                app.scroll_top = app.scroll_top.saturating_sub(1);
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if app.search_active {
-                                navigate_pack_match(app, 1);
-                            } else {
-                                let total = app.total_rows();
-                                if app.scroll_top + max_rows < total {
-                                    app.scroll_top += 1;
-                                }
-                            }
-                        }
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            if app.search_active {
-                                if !app.jump_to_prev_global_match() {
-                                    // show message via status
-                                }
-                            } else if app.current_pack > 0 {
-                                app.current_pack -= 1;
-                                app.scroll_top = 0;
-                            }
-                        }
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            if app.search_active {
-                                if !app.jump_to_next_global_match(&*mmap) {
-                                    // show message via status
-                                }
-                            } else if app.current_pack + 1 < app.total_packs {
-                                app.current_pack += 1;
-                                app.scroll_top = 0;
-                            }
-                        }
-                        KeyCode::Char('K') => {
-                            app.scroll_top = app.scroll_top.saturating_sub(max_rows);
-                        }
-                        KeyCode::Char('J') => {
-                            let total = app.total_rows();
-                            app.scroll_top = (app.scroll_top + max_rows).min(total.saturating_sub(max_rows));
-                        }
-                        KeyCode::Char('H') => {
-                            let target = app.current_pack.saturating_sub(16);
-                            if app.search_active {
-                                let offset = target * app.pack_size;
-                                if let Some(ref mut search) = app.search {
-                                    if let Some(idx) =
-                                        search.find_next_match_after_offset(&*mmap, offset)
-                                    {
-                                        app.jump_to_global_match(idx);
-                                    }
-                                }
-                            } else {
-                                app.current_pack = target;
-                                app.scroll_top = 0;
-                            }
-                        }
-                        KeyCode::Char('L') => {
-                            let target = (app.current_pack + 16).min(app.total_packs - 1);
-                            if app.search_active {
-                                let offset = target * app.pack_size;
-                                if let Some(ref mut search) = app.search {
-                                    if let Some(idx) =
-                                        search.find_next_match_after_offset(&*mmap, offset)
-                                    {
-                                        app.jump_to_global_match(idx);
-                                    }
-                                }
-                            } else {
-                                app.current_pack = target;
-                                app.scroll_top = 0;
-                            }
-                        }
-                        KeyCode::PageUp => {
-                            let step = max_rows / 2;
-                            app.scroll_top = app.scroll_top.saturating_sub(step.max(1));
-                        }
-                        KeyCode::PageDown => {
-                            let step = max_rows / 2;
-                            let total = app.total_rows();
-                            app.scroll_top =
-                                (app.scroll_top + step.max(1)).min(total.saturating_sub(max_rows));
-                        }
-                        KeyCode::Home => {
-                            if app.search_active {
-                                if let Some(ref mut search) = app.search {
-                                    if let Some(idx) =
-                                        search.find_next_match_after_offset(&*mmap, 0)
-                                    {
-                                        app.jump_to_global_match(idx);
-                                    }
-                                }
-                            } else {
-                                app.current_pack = 0;
-                                app.scroll_top = 0;
-                            }
-                        }
-                        KeyCode::Char('O') | KeyCode::Char('o') => {
-                            if app.search_active {
-                                let current_offset =
-                                    app.current_pack * app.pack_size + app.scroll_top * 16;
-                                let new_min = current_offset.saturating_sub(search::FIND_CHUNK_SIZE);
-                                if let Some(ref mut search) = app.search {
-                                    if let Some(idx) =
-                                        search.find_next_match_after_offset(&*mmap, new_min)
-                                    {
-                                        if idx != app.global_match_idx.unwrap_or(usize::MAX)
-                                            || new_min <= search.match_ranges[idx].0
-                                        {
-                                            app.jump_to_global_match(idx);
-                                        }
-                                    }
-                                }
-                            } else {
-                                app.current_pack = app.current_pack.saturating_sub(256);
-                                app.scroll_top = 0;
-                            }
-                        }
-                        KeyCode::Char('P') | KeyCode::Char('p') => {
-                            if app.search_active {
-                                let current_offset =
-                                    app.current_pack * app.pack_size + app.scroll_top * 16;
-                                let new_min = current_offset + search::FIND_CHUNK_SIZE;
-                                if let Some(ref mut search) = app.search {
-                                    if let Some(idx) =
-                                        search.find_next_match_after_offset(&*mmap, new_min)
-                                    {
-                                        app.jump_to_global_match(idx);
-                                    }
-                                }
-                            } else {
-                                app.current_pack = (app.current_pack + 256).min(app.total_packs - 1);
-                                app.scroll_top = 0;
-                            }
+                            continue;
                         }
                         _ => {}
                     }
                 }
+
+                match app.input_mode {
+                    InputMode::Help => {
+                        app.input_mode = InputMode::Normal;
+                    }
+                    InputMode::SaveConfirm => {
+                        match key.code {
+                            KeyCode::Left | KeyCode::Char('h') => app.save_selected = true,
+                            KeyCode::Right | KeyCode::Char('l') => app.save_selected = false,
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                app.save_selected = true;
+                                break;
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('N') => {
+                                app.save_selected = false;
+                                break;
+                            }
+                            KeyCode::Enter | KeyCode::Char(' ') => break,
+                            KeyCode::Esc => {
+                                app.save_selected = false;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    InputMode::SearchInput
+                    | InputMode::StringSearchInput
+                    | InputMode::GotoInput => {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.input_mode = InputMode::Normal;
+                                app.input_buf.clear();
+                            }
+                            KeyCode::Enter => {
+                                let buf = app.input_buf.clone();
+                                let mode = app.input_mode;
+                                app.input_mode = InputMode::Normal;
+                                app.input_buf.clear();
+                                if mode == InputMode::GotoInput {
+                                    if let Some(val) = parse_hex_input(&buf) {
+                                        let target = val.saturating_sub(1);
+                                        if target < app.total_packs {
+                                            if app.search_active {
+                                                let offset = target * app.pack_size;
+                                                if let Some(ref mut search) = app.search {
+                                                    if let Some(idx) = search
+                                                        .find_next_match_after_offset(
+                                                            &*mmap, offset,
+                                                        )
+                                                    {
+                                                        app.jump_to_global_match(idx);
+                                                    }
+                                                }
+                                            } else {
+                                                app.current_pack = target;
+                                                app.scroll_top = 0;
+                                            }
+                                        }
+                                    }
+                                } else if mode == InputMode::StringSearchInput {
+                                    if let Some((label, bytes)) =
+                                        search::parse_string_search(&buf)
+                                    {
+                                        app.do_search(
+                                            &*mmap, false, bytes, None, label, term_h,
+                                        );
+                                    }
+                                } else {
+                                    if let Some((label, is_regex, bytes, regex)) =
+                                        search::parse_search_input(&buf)
+                                    {
+                                        app.do_search(
+                                            &*mmap, is_regex, bytes, regex, label, term_h,
+                                        );
+                                    }
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                app.input_buf.pop();
+                            }
+                            KeyCode::Char(c) => {
+                                app.input_buf.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+                    InputMode::Edit => {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.input_mode = InputMode::Normal;
+                            }
+                            KeyCode::Left => {
+                                if app.mode == DisplayMode::Hex {
+                                    if app.cursor_nibble == 0 {
+                                        if app.cursor_byte > 0 {
+                                            app.cursor_byte -= 1;
+                                            app.cursor_nibble = 1;
+                                        }
+                                    } else {
+                                        app.cursor_nibble = 0;
+                                    }
+                                } else if app.cursor_byte > 0 {
+                                    app.cursor_byte -= 1;
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            KeyCode::Right => {
+                                if app.mode == DisplayMode::Hex {
+                                    if app.cursor_nibble == 0 {
+                                        app.cursor_nibble = 1;
+                                    } else if app.cursor_byte + 1 < app.file_size {
+                                        app.cursor_byte += 1;
+                                        app.cursor_nibble = 0;
+                                    }
+                                } else if app.cursor_byte + 1 < app.file_size {
+                                    app.cursor_byte += 1;
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            KeyCode::Up => {
+                                app.cursor_byte = app.cursor_byte.saturating_sub(16);
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            KeyCode::Down => {
+                                if app.cursor_byte + 16 < app.file_size {
+                                    app.cursor_byte += 16;
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            KeyCode::Enter => {
+                                if app.mode == DisplayMode::Ascii {
+                                    app.edit_ascii_input(&mut *mmap, '\n');
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            KeyCode::Tab => {
+                                if app.mode == DisplayMode::Ascii {
+                                    app.edit_ascii_input(&mut *mmap, '\t');
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            KeyCode::Char(c) => {
+                                if app.mode == DisplayMode::Hex {
+                                    if c.is_ascii_hexdigit() {
+                                        app.edit_hex_input(&mut *mmap, c);
+                                    }
+                                } else {
+                                    app.edit_ascii_input(&mut *mmap, c);
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            _ => {}
+                        }
+                    }
+                    InputMode::Normal => {
+                        if key.code == KeyCode::Esc {
+                            if app.search_active {
+                                app.clear_search();
+                            }
+                            continue;
+                        }
+                        match key.code {
+                            KeyCode::Char('q') => {
+                                if app.dirty {
+                                    app.input_mode = InputMode::SaveConfirm;
+                                    app.save_selected = true;
+                                } else {
+                                    break;
+                                }
+                            }
+                            KeyCode::Char('?') => {
+                                app.input_mode = InputMode::Help;
+                            }
+                            KeyCode::Char('m') => {
+                                app.mode = app.mode.next();
+                            }
+                            KeyCode::Char('i') => {
+                                app.input_mode = InputMode::Edit;
+                                if app.cursor_byte == 0 && !app.dirty {
+                                    app.cursor_byte = app.current_pack * app.pack_size
+                                        + app.scroll_top * 16;
+                                }
+                                app.ensure_cursor_visible(term_h);
+                            }
+                            KeyCode::Char('g') => {
+                                app.input_mode = InputMode::GotoInput;
+                                app.input_prompt = "Go to pack (hex):".into();
+                                app.input_buf.clear();
+                            }
+                            KeyCode::Char('f') => {
+                                app.input_mode = InputMode::SearchInput;
+                                app.input_prompt = "search hex:".into();
+                                app.input_buf.clear();
+                            }
+                            KeyCode::Char('F') => {
+                                app.input_mode = InputMode::StringSearchInput;
+                                app.input_prompt = "Search STR:".into();
+                                app.input_buf.clear();
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if app.search_active {
+                                    navigate_pack_match(app, -1);
+                                } else {
+                                    app.scroll_top = app.scroll_top.saturating_sub(1);
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if app.search_active {
+                                    navigate_pack_match(app, 1);
+                                } else {
+                                    let total = app.total_rows();
+                                    if app.scroll_top + max_rows < total {
+                                        app.scroll_top += 1;
+                                    }
+                                }
+                            }
+                            KeyCode::Left | KeyCode::Char('h') => {
+                                if app.search_active {
+                                    app.jump_to_prev_global_match();
+                                } else if app.current_pack > 0 {
+                                    app.current_pack -= 1;
+                                    app.scroll_top = 0;
+                                }
+                            }
+                            KeyCode::Right | KeyCode::Char('l') => {
+                                if app.search_active {
+                                    app.jump_to_next_global_match(&*mmap);
+                                } else if app.current_pack + 1 < app.total_packs {
+                                    app.current_pack += 1;
+                                    app.scroll_top = 0;
+                                }
+                            }
+                            KeyCode::Char('K') => {
+                                app.scroll_top = app.scroll_top.saturating_sub(max_rows);
+                            }
+                            KeyCode::Char('J') => {
+                                let total = app.total_rows();
+                                app.scroll_top = (app.scroll_top + max_rows)
+                                    .min(total.saturating_sub(max_rows));
+                            }
+                            KeyCode::Char('H') => {
+                                let target = app.current_pack.saturating_sub(16);
+                                if app.search_active {
+                                    let offset = target * app.pack_size;
+                                    if let Some(ref mut search) = app.search {
+                                        if let Some(idx) =
+                                            search.find_next_match_after_offset(&*mmap, offset)
+                                        {
+                                            app.jump_to_global_match(idx);
+                                        }
+                                    }
+                                } else {
+                                    app.current_pack = target;
+                                    app.scroll_top = 0;
+                                }
+                            }
+                            KeyCode::Char('L') => {
+                                let target = (app.current_pack + 16).min(app.total_packs - 1);
+                                if app.search_active {
+                                    let offset = target * app.pack_size;
+                                    if let Some(ref mut search) = app.search {
+                                        if let Some(idx) =
+                                            search.find_next_match_after_offset(&*mmap, offset)
+                                        {
+                                            app.jump_to_global_match(idx);
+                                        }
+                                    }
+                                } else {
+                                    app.current_pack = target;
+                                    app.scroll_top = 0;
+                                }
+                            }
+                            KeyCode::PageUp => {
+                                let step = max_rows / 2;
+                                app.scroll_top = app.scroll_top.saturating_sub(step.max(1));
+                            }
+                            KeyCode::PageDown => {
+                                let step = max_rows / 2;
+                                let total = app.total_rows();
+                                app.scroll_top = (app.scroll_top + step.max(1))
+                                    .min(total.saturating_sub(max_rows));
+                            }
+                            KeyCode::Home => {
+                                if app.search_active {
+                                    if let Some(ref mut search) = app.search {
+                                        if let Some(idx) =
+                                            search.find_next_match_after_offset(&*mmap, 0)
+                                        {
+                                            app.jump_to_global_match(idx);
+                                        }
+                                    }
+                                } else {
+                                    app.current_pack = 0;
+                                    app.scroll_top = 0;
+                                }
+                            }
+                            KeyCode::Char('O') | KeyCode::Char('o') => {
+                                if app.search_active {
+                                    let current_offset =
+                                        app.current_pack * app.pack_size + app.scroll_top * 16;
+                                    let new_min =
+                                        current_offset.saturating_sub(search::FIND_CHUNK_SIZE);
+                                    if let Some(ref mut search) = app.search {
+                                        if let Some(idx) =
+                                            search.find_next_match_after_offset(&*mmap, new_min)
+                                        {
+                                            if idx != app.global_match_idx.unwrap_or(usize::MAX)
+                                                || new_min <= search.match_ranges[idx].0
+                                            {
+                                                app.jump_to_global_match(idx);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    app.current_pack = app.current_pack.saturating_sub(256);
+                                    app.scroll_top = 0;
+                                }
+                            }
+                            KeyCode::Char('P') | KeyCode::Char('p') => {
+                                if app.search_active {
+                                    let current_offset =
+                                        app.current_pack * app.pack_size + app.scroll_top * 16;
+                                    let new_min = current_offset + search::FIND_CHUNK_SIZE;
+                                    if let Some(ref mut search) = app.search {
+                                        if let Some(idx) =
+                                            search.find_next_match_after_offset(&*mmap, new_min)
+                                        {
+                                            app.jump_to_global_match(idx);
+                                        }
+                                    }
+                                } else {
+                                    app.current_pack =
+                                        (app.current_pack + 256).min(app.total_packs - 1);
+                                    app.scroll_top = 0;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
+            _ => {}
         }
     }
 
