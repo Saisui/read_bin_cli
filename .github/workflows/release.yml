@@ -1,0 +1,62 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            name: linux-x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl-tools (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cd rust-min && cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp rust-min/target/${{ matrix.target }}/release/read-bin.exe read-bin-${{ matrix.name }}.exe
+          else
+            cp rust-min/target/${{ matrix.target }}/release/read-bin read-bin-${{ matrix.name }}
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: read-bin-${{ matrix.name }}
+          path: read-bin-${{ matrix.name }}*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: read-bin-*
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: read-bin-*
