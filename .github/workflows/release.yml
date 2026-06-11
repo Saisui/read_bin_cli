@@ -36,6 +36,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Install aarch64 cross-compiler
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build
         run: cd rust-min && cargo build --release --target ${{ matrix.target }}
 
