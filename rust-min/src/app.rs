@@ -1,13 +1,8 @@
 use std::collections::HashSet;
-
 use crate::search::Search;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplayMode {
-    Ascii,
-    Hex,
-    Utf8,
-}
+pub enum DisplayMode { Ascii, Hex, Utf8 }
 
 impl DisplayMode {
     pub fn next(self) -> Self {
@@ -18,11 +13,7 @@ impl DisplayMode {
         }
     }
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Ascii => "[ASCII]",
-            Self::Hex => "[HEX]",
-            Self::Utf8 => "[UTF8]",
-        }
+        match self { Self::Ascii => "[ASCII]", Self::Hex => "[HEX]", Self::Utf8 => "[UTF8]" }
     }
 }
 
@@ -69,7 +60,7 @@ pub struct App {
     pub sel_start: Option<usize>,
     pub sel_end: Option<usize>,
     pub help_scroll: usize,
-    pub help_rect: Option<(u16, u16, u16, u16)>,
+    pub help_rect: Option<(u16, u16, u16, u16)>, // x, y, w, h
     pub cursor_focused: bool,
 }
 
@@ -112,8 +103,7 @@ impl App {
     }
 
     pub fn data_len(&self) -> usize {
-        self.pack_size
-            .min(self.file_size - self.current_pack * self.pack_size)
+        self.pack_size.min(self.file_size - self.current_pack * self.pack_size)
     }
 
     pub fn total_rows(&self) -> usize {
@@ -124,11 +114,7 @@ impl App {
         let mut s = size as f64;
         for u in &["B", "KB", "MB", "GB"] {
             if s < 1024.0 {
-                return if *u == "B" {
-                    format!("{}B", s as usize)
-                } else {
-                    format!("{:.1}{}", s, u)
-                };
+                return if *u == "B" { format!("{}B", s as usize) } else { format!("{:.1}{}", s, u) };
             }
             s /= 1024.0;
         }
@@ -136,9 +122,7 @@ impl App {
     }
 
     pub fn current_match_range(&self) -> Option<(usize, usize)> {
-        if !self.search_active {
-            return None;
-        }
+        if !self.search_active { return None; }
         let idx = self.global_match_idx?;
         self.search.as_ref()?.ranges.get(idx).copied()
     }
@@ -157,25 +141,15 @@ impl App {
             let (r, set) = s.pack_matches(self.current_pack);
             self.pack_ranges = r;
             self.pack_set = set;
-            self.pack_match_idx = self
-                .global_match_idx
+            self.pack_match_idx = self.global_match_idx
                 .and_then(|gi| s.ranges.get(gi).map(|&(st, _)| st))
-                .and_then(|st| {
-                    self.pack_ranges
-                        .iter()
-                        .position(|(s, e)| *s <= st && st < *e)
-                });
+                .and_then(|st| self.pack_ranges.iter().position(|(s, e)| *s <= st && st < *e));
         }
     }
 
     pub fn jump_global(&mut self, idx: usize) -> bool {
-        let s = match self.search.as_ref() {
-            Some(s) => s,
-            None => return false,
-        };
-        if idx >= s.ranges.len() {
-            return false;
-        }
+        let s = match self.search.as_ref() { Some(s) => s, None => return false };
+        if idx >= s.ranges.len() { return false; }
         let (start, _) = s.ranges[idx];
         self.global_match_idx = Some(idx);
         self.current_pack = start / self.pack_size;
@@ -188,13 +162,8 @@ impl App {
     pub fn next_global(&mut self, mmap: &[u8]) -> bool {
         let ni = self.global_match_idx.map_or(0, |i| i + 1);
         let len = self.search.as_ref().map_or(0, |s| s.ranges.len());
-        if ni < len {
-            return self.jump_global(ni);
-        }
-        let last = self
-            .search
-            .as_ref()
-            .and_then(|s| s.ranges.last().map(|(_, e)| *e));
+        if ni < len { return self.jump_global(ni); }
+        let last = self.search.as_ref().and_then(|s| s.ranges.last().map(|(_, e)| *e));
         if let Some(e) = last {
             let s = self.search.as_mut().unwrap();
             if s.extend(mmap, e + 1) && ni < s.ranges.len() {
@@ -205,39 +174,25 @@ impl App {
     }
 
     pub fn prev_global(&mut self) -> bool {
-        let cur = match self.global_match_idx {
-            Some(i) => i,
-            None => return false,
-        };
-        if cur == 0 {
-            return false;
-        }
+        let cur = match self.global_match_idx { Some(i) => i, None => return false };
+        if cur == 0 { return false; }
         self.jump_global(cur - 1)
     }
 
     pub fn ensure_cursor_visible(&mut self, h: u16) {
         let pk = self.cursor_byte / self.pack_size;
-        if pk != self.current_pack {
-            self.current_pack = pk;
-        }
+        if pk != self.current_pack { self.current_pack = pk; }
         let row = (self.cursor_byte % self.pack_size) / 16;
         let mr = self.max_rows(h);
-        if row < self.scroll_top {
-            self.scroll_top = row;
-        } else if row >= self.scroll_top + mr {
-            self.scroll_top = row - mr + 1;
-        }
+        if row < self.scroll_top { self.scroll_top = row; }
+        else if row >= self.scroll_top + mr { self.scroll_top = row - mr + 1; }
         let tr = self.total_rows();
         self.scroll_top = self.scroll_top.min(tr.saturating_sub(mr));
     }
 
     pub fn modify(&mut self, mmap: &mut [u8], off: usize, val: u8) {
         if off < self.file_size && mmap[off] != val {
-            self.undo_stack.push(UndoEntry {
-                offset: off,
-                old: mmap[off],
-                new: val,
-            });
+            self.undo_stack.push(UndoEntry { offset: off, old: mmap[off], new: val });
             self.redo_stack.clear();
             mmap[off] = val;
             self.dirty = true;
@@ -271,19 +226,12 @@ impl App {
             'A'..='F' => ch as u8 - b'A' + 10,
             _ => return,
         };
-        if self.cursor_byte >= self.file_size {
-            return;
-        }
+        if self.cursor_byte >= self.file_size { return; }
         let cur = mmap[self.cursor_byte];
-        let new = if self.cursor_nibble == 0 {
-            (cur & 0x0f) | (nib << 4)
-        } else {
-            (cur & 0xf0) | nib
-        };
+        let new = if self.cursor_nibble == 0 { (cur & 0x0f) | (nib << 4) } else { (cur & 0xf0) | nib };
         self.modify(mmap, self.cursor_byte, new);
-        if self.cursor_nibble == 0 {
-            self.cursor_nibble = 1;
-        } else {
+        if self.cursor_nibble == 0 { self.cursor_nibble = 1; }
+        else {
             self.cursor_nibble = 0;
             self.cursor_byte += 1;
             if self.cursor_byte >= self.file_size {
@@ -297,17 +245,15 @@ impl App {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         for &b in s.as_bytes() {
-            if self.cursor_byte >= self.file_size {
-                return;
-            }
+            if self.cursor_byte >= self.file_size { return; }
             self.modify(mmap, self.cursor_byte, b);
             self.cursor_byte += 1;
         }
-        if self.cursor_byte >= self.file_size {
-            self.cursor_byte = self.file_size - 1;
-        }
+        if self.cursor_byte >= self.file_size { self.cursor_byte = self.file_size - 1; }
     }
 
+
+    /// Accept a pre-built Search, run it, position to first match
     pub fn apply_search(&mut self, mut acc: Search, mmap: &[u8], h: u16) -> bool {
         let off = self.current_pack * self.pack_size + self.scroll_top * 16;
         acc.extend(mmap, off);

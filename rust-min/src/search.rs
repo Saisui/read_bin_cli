@@ -3,75 +3,6 @@ use std::collections::HashSet;
 pub const FIND_CHUNK: usize = 1024 * 1024;
 const CHUNK: usize = 1024 * 1024;
 
-// ─── byte-level pattern matcher ──────────────────────────────
-#[derive(Clone, Copy)]
-pub struct BytePat { mask: u8, val: u8 }
-
-impl BytePat {
-    fn exact(b: u8) -> Self { Self { mask: 0xff, val: b } }
-    fn hi_nibble(hi: u8) -> Self { Self { mask: 0xf0, val: hi << 4 } }
-    fn lo_nibble(lo: u8) -> Self { Self { mask: 0x0f, val: lo } }
-    fn any() -> Self { Self { mask: 0x00, val: 0 } }
-    fn matches(&self, b: u8) -> bool { b & self.mask == self.val }
-}
-
-pub struct BytesPattern { pub pats: Vec<BytePat> }
-
-impl BytesPattern {
-    fn find_in(&self, data: &[u8], start: usize) -> Option<usize> {
-        let nlen = self.pats.len();
-        if nlen == 0 || start + nlen > data.len() { return None; }
-        for i in start..=data.len() - nlen {
-            if self.pats.iter().enumerate().all(|(j, p)| p.matches(data[i + j])) {
-                return Some(i);
-            }
-        }
-        None
-    }
-}
-
-fn compile_bytes_pattern(s: &str) -> Option<BytesPattern> {
-    let clean: String = s.to_lowercase().chars()
-        .filter(|c| c.is_ascii_hexdigit() || *c == 'x' || *c == 'z')
-        .collect();
-    if clean.is_empty() { return None; }
-    let ch: Vec<char> = clean.chars().collect();
-    let mut pats = Vec::new();
-    let mut i = 0;
-    while i < ch.len() {
-        if ch[i] == 'z' { pats.push(BytePat::any()); i += 1; }
-        else if i + 1 >= ch.len() { return None; }
-        else {
-            let (a, b) = (ch[i], ch[i + 1]);
-            if a != 'x' && b != 'x' { pats.push(BytePat::exact(hv(a)? * 16 + hv(b)?)); }
-            else if a != 'x' && b == 'x' { pats.push(BytePat::hi_nibble(hv(a)?)); }
-            else if a == 'x' && b != 'x' { pats.push(BytePat::lo_nibble(hv(b)?)); }
-            else { pats.push(BytePat::any()); }
-            i += 2;
-        }
-    }
-    Some(BytesPattern { pats })
-}
-
-fn compile_fallback_pat(s: &str) -> Option<BytesPattern> {
-    let ch: Vec<char> = s.chars().collect();
-    let mut pats = Vec::new();
-    let mut i = 0;
-    while i < ch.len() {
-        if i + 1 < ch.len() && ch[i].is_ascii_hexdigit() && ch[i + 1].is_ascii_hexdigit()
-            && (i == 0 || ch[i - 1] != '\\')
-        {
-            pats.push(BytePat::exact(hv(ch[i]).unwrap_or(0) * 16 + hv(ch[i + 1]).unwrap_or(0)));
-            i += 2;
-        } else {
-            pats.push(BytePat::exact(ch[i] as u8));
-            i += 1;
-        }
-    }
-    if pats.is_empty() { None } else { Some(BytesPattern { pats }) }
-}
-
-// ─── search engine ───────────────────────────────────────────
 pub struct Search {
     needle: Needle,
     pack_size: usize,
@@ -84,19 +15,23 @@ pub struct Search {
 
 enum Needle {
     Lit(Vec<u8>),
-    Pat(BytesPattern),
-    Re(regex_lite::Regex),
+    Pat(Vec<NibAtom>),
+}
+
+/// Per-nibble matcher. Two NibAtoms = one byte constraint.
+#[derive(Clone)]
+pub enum NibAtom {
+    Exact(u8),       // 0x0..0xF
+    Range(u8, u8),   // inclusive nibble range
+    Any,             // x
 }
 
 impl Search {
     pub fn new_hex(data: Vec<u8>, ps: usize, fs: usize, label: String) -> Self {
         Self { needle: Needle::Lit(data), pack_size: ps, file_size: fs, ranges: Vec::new(), set: HashSet::new(), scanned: 0, label }
     }
-    pub fn new_pat(pat: BytesPattern, ps: usize, fs: usize, label: String) -> Self {
+    pub fn new_pat(pat: Vec<NibAtom>, ps: usize, fs: usize, label: String) -> Self {
         Self { needle: Needle::Pat(pat), pack_size: ps, file_size: fs, ranges: Vec::new(), set: HashSet::new(), scanned: 0, label }
-    }
-    pub fn new_re(re: regex_lite::Regex, ps: usize, fs: usize, label: String) -> Self {
-        Self { needle: Needle::Re(re), pack_size: ps, file_size: fs, ranges: Vec::new(), set: HashSet::new(), scanned: 0, label }
     }
     pub fn has_more(&self) -> bool { self.scanned < self.file_size }
     pub fn extend(&mut self, mmap: &[u8], min_off: usize) -> bool {
@@ -108,11 +43,11 @@ impl Search {
             match &self.needle {
                 Needle::Lit(needle) => {
                     let nlen = needle.len();
+                    if nlen == 0 { break; }
                     let mut pos = start;
                     loop {
                         pos = match mmap[pos..end].windows(nlen).position(|w| w == needle.as_slice()) {
-                            Some(p) => pos + p,
-                            None => break,
+                            Some(p) => pos + p, None => break,
                         };
                         let me = pos + nlen;
                         if self.ranges.last().map_or(true, |(_, e)| *e <= pos) {
@@ -122,30 +57,19 @@ impl Search {
                         pos += 1;
                     }
                 }
-                Needle::Pat(pat) => {
-                    let nlen = pat.pats.len();
+                Needle::Pat(atoms) => {
+                    let nbytes = atoms.len() / 2;
+                    if nbytes == 0 { break; }
                     let mut pos = start;
-                    while let Some(p) = pat.find_in(mmap, pos.max(start)) {
-                        let me = p + nlen;
-                        if me > end { break; }
-                        if self.ranges.last().map_or(true, |(_, e)| *e <= p) {
-                            self.ranges.push((p, me));
-                            for o in p..me { self.set.insert(o); }
+                    while pos + nbytes <= end {
+                        if atoms_match(atoms, mmap, pos) {
+                            let me = pos + nbytes;
+                            if self.ranges.last().map_or(true, |(_, e)| *e <= pos) {
+                                self.ranges.push((pos, me));
+                                for o in pos..me { self.set.insert(o); }
+                            }
                         }
-                        pos = p + 1;
-                    }
-                }
-                Needle::Re(re) => {
-                    let chunk = &mmap[start..end];
-                    let s = String::from_utf8_lossy(chunk);
-                    let mut moff = 0;
-                    while let Some(m) = re.find_at(&s, moff) {
-                        let ms = start + m.start();
-                        let me = start + m.end();
-                        if self.ranges.last().map_or(true, |(_, e)| *e <= ms) {
-                            self.ranges.push((ms, me));
-                        }
-                        moff = m.end();
+                        pos += 1;
                     }
                 }
             }
@@ -181,25 +105,31 @@ impl Search {
     }
 }
 
-// ─── input parsing ───────────────────────────────────────────
+fn atoms_match(atoms: &[NibAtom], data: &[u8], pos: usize) -> bool {
+    atoms.chunks(2).enumerate().all(|(i, pair)| {
+        let b = data[pos + i];
+        let hi_ok = nib_match(&pair[0], b >> 4);
+        let lo_ok = if pair.len() > 1 { nib_match(&pair[1], b & 0x0f) } else { true };
+        hi_ok && lo_ok
+    })
+}
+
+fn nib_match(a: &NibAtom, val: u8) -> bool {
+    match a {
+        NibAtom::Exact(n) => val == *n,
+        NibAtom::Range(lo, hi) => val >= *lo && val <= *hi,
+        NibAtom::Any => true,
+    }
+}
+
 pub enum SearchKind {
     Hex { bytes: Vec<u8>, label: String },
-    Pat { pat: BytesPattern, label: String },
-    Re { re: regex_lite::Regex, label: String },
-    Str { bytes: Vec<u8>, label: String },
+    Pat { pat: Vec<NibAtom>, label: String },
 }
 
 pub fn parse_input(s: &str) -> Option<SearchKind> {
     let t = s.trim();
     if t.is_empty() { return None; }
-    // /regex/
-    if t.starts_with('/') && t.ends_with('/') && t.len() >= 2 {
-        let pat = &t[1..t.len()-1];
-        if let Ok(re) = regex_lite::Regex::new(pat) {
-            return Some(SearchKind::Re { re, label: t.into() });
-        }
-        return None;
-    }
     // pure hex
     let hex: String = t.chars().filter(|c| !c.is_whitespace()).collect();
     if !hex.is_empty() && hex.len() % 2 == 0 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -207,16 +137,8 @@ pub fn parse_input(s: &str) -> Option<SearchKind> {
             return Some(SearchKind::Hex { bytes, label: t.into() });
         }
     }
-    // advanced hex with x/z → manual byte pattern
-    let lo = t.to_lowercase();
-    if lo.contains('x') || lo.contains('z') {
-        if let Some(pat) = compile_bytes_pattern(t) {
-            return Some(SearchKind::Pat { pat, label: t.into() });
-        }
-        return None;
-    }
-    // fallback: convert hex-like pattern to bytes pattern
-    if let Some(pat) = compile_fallback_pat(t) {
+    // x/z/[] nibble pattern
+    if let Some(pat) = compile_pat(t) {
         return Some(SearchKind::Pat { pat, label: t.into() });
     }
     None
@@ -229,9 +151,46 @@ pub fn parse_str_input(s: &str) -> Option<(String, Vec<u8>)> {
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    (0..s.len()).step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i+2], 16).ok())
-        .collect()
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).ok()).collect()
 }
 
 fn hv(c: char) -> Option<u8> { c.to_digit(16).map(|v| v as u8) }
+
+fn tokenize(s: &str) -> Option<Vec<NibAtom>> {
+    let ch: Vec<char> = s.to_lowercase().chars().collect();
+    let mut atoms = Vec::new();
+    let mut i = 0;
+    while i < ch.len() {
+        if ch[i].is_ascii_whitespace() { i += 1; continue; }
+        if ch[i] == 'z' {
+            atoms.push(NibAtom::Any);
+            atoms.push(NibAtom::Any);
+            i += 1;
+        } else if ch[i] == 'x' {
+            atoms.push(NibAtom::Any);
+            i += 1;
+        } else if ch[i] == '[' {
+            let start = i + 1;
+            let end = ch[start..].iter().position(|&c| c == ']')? + start;
+            let inner: String = ch[start..end].iter().collect();
+            let (lo_s, hi_s) = inner.split_once('-')?;
+            let lo = hv(lo_s.trim().chars().next()?)?;
+            let hi = hv(hi_s.trim().chars().next()?)?;
+            atoms.push(NibAtom::Range(lo.min(hi), lo.max(hi)));
+            i = end + 1;
+        } else if ch[i].is_ascii_hexdigit() {
+            atoms.push(NibAtom::Exact(hv(ch[i])?));
+            i += 1;
+        } else {
+            return None;
+        }
+    }
+    Some(atoms)
+}
+
+fn compile_pat(s: &str) -> Option<Vec<NibAtom>> {
+    let atoms = tokenize(s)?;
+    if atoms.is_empty() { return None; }
+    if atoms.len() % 2 != 0 { return None; }
+    Some(atoms)
+}

@@ -11,6 +11,7 @@ unknown:   { fg: white, bg: red }
 cursor:    { fg: black, bg: yellow }
 selection: { fg: yellow, bg: green }
 found:     { fg: black, bg: yellow }
+focused_button: { fg: black, bg: white }
 
 dim:
   global: 0.8

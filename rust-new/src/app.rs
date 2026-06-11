@@ -252,12 +252,8 @@ impl App {
         if self.cursor_byte >= self.file_size { self.cursor_byte = self.file_size - 1; }
     }
 
-    pub fn do_search(&mut self, mmap: &[u8], is_re: bool, bytes: Vec<u8>, re: Option<regex::bytes::Regex>, label: String, h: u16) -> bool {
-        let mut acc = if is_re {
-            Search::new_re(re.unwrap(), self.pack_size, self.file_size, label)
-        } else {
-            Search::new_hex(bytes, self.pack_size, self.file_size, label)
-        };
+    /// Accept a pre-built Search, run it, position to first match
+    pub fn apply_search(&mut self, mut acc: Search, mmap: &[u8], h: u16) -> bool {
         let off = self.current_pack * self.pack_size + self.scroll_top * 16;
         acc.extend(mmap, off);
         if !acc.ranges.is_empty() {

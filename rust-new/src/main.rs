@@ -15,7 +15,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use memmap2::{Mmap, MmapMut};
+use memmap2::Mmap;
 use ratatui::{
     backend::CrosstermBackend,
     layout::Rect,
@@ -39,7 +39,7 @@ fn main() -> io::Result<()> {
     let file = if dump {
         File::open(&filename)?
     } else {
-        OpenOptions::new().read(true).write(true).open(&filename)?
+        OpenOptions::new().read(true).open(&filename)?
     };
     let file_size = file.metadata()?.len() as usize;
     if file_size == 0 {
@@ -78,13 +78,19 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let mut mmap = unsafe { MmapMut::map_mut(&file)? };
+    let mmap = unsafe { Mmap::map(&file)? };
+    let mut data = mmap[..file_size].to_vec();
 
     // load color config (embedded defaults if color.yaml missing)
     if let Err(e) = init_colors(std::path::Path::new("color.yaml")) {
         eprintln!("color.yaml: {e}");
         return Err(io::Error::new(io::ErrorKind::Other, e));
     }
+
+    // load terminal palette for accurate dimming
+    color_config::init_terminal_palette(
+        &std::path::Path::new(&std::env::var("HOME").unwrap_or_default()),
+    );
 
     enable_raw_mode()
         .map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
@@ -102,7 +108,7 @@ fn main() -> io::Result<()> {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| filename.clone());
     let mut app = App::new(file_size, base_name);
-    let result = run(&mut terminal, &mut app, &mut mmap);
+    let result = run(&mut terminal, &mut app, &mut data, &filename);
 
     disable_raw_mode()?;
     execute!(
@@ -111,7 +117,6 @@ fn main() -> io::Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
-    drop(mmap);
 
     if let Err(e) = result {
         eprintln!("Error: {}", e);
@@ -122,12 +127,19 @@ fn main() -> io::Result<()> {
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
-    mmap: &mut MmapMut,
+    data: &mut [u8],
+    filename: &str,
 ) -> io::Result<()> {
+    let mut last_scroll = std::time::Instant::now();
     loop {
         let area = terminal.size()?;
         let th = area.height;
         let max_rows = app.max_rows(th);
+
+        // debounce: dedup rapid Up/Down key-repeat on desktop
+        let now = std::time::Instant::now();
+        let since_scroll = now.duration_since(last_scroll);
+        let debounce = since_scroll.as_millis() < 20;
 
         // clamp scroll
         let tr = app.total_rows();
@@ -157,16 +169,16 @@ fn run(
             let area = f.area();
             match app.input_mode {
                 InputMode::Help => {
-                    draw_hex(f, app, &**mmap, area);
+                    draw_hex(f, app, data, area);
                     draw_help(f, app, area);
                 }
                 InputMode::SaveConfirm => {
-                    draw_hex(f, app, &**mmap, area);
+                    draw_hex(f, app, data, area);
                     draw_save_dialog(f, app, area);
                 }
                 _ => {
-                    draw_hex(f, app, &**mmap, area);
-                    draw_status(f, app, &**mmap, area);
+                    draw_hex(f, app, data, area);
+                    draw_status(f, app, data, area);
                 }
             }
         })?;
@@ -228,11 +240,11 @@ fn run(
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     match key.code {
                         KeyCode::Char('z') => {
-                            app.undo(&mut *mmap);
+                            app.undo(data);
                             continue;
                         }
                         KeyCode::Char('y') => {
-                            app.redo(&mut *mmap);
+                            app.redo(data);
                             continue;
                         }
                         KeyCode::Char('q') => {
@@ -253,6 +265,33 @@ fn run(
                         KeyCode::Char('h') => {
                             app.input_mode = InputMode::Help;
                             app.help_scroll = 0;
+                            continue;
+                        }
+                        KeyCode::Char('s') => {
+                            let _ = std::fs::write(filename, &*data);
+                            app.dirty = false;
+                            continue;
+                        }
+                        KeyCode::Left => {
+                            if app.input_mode == InputMode::Edit
+                                && app.current_pack > 0
+                            {
+                                app.current_pack -= 1;
+                                app.scroll_top = 0;
+                                app.cursor_byte = app.current_pack * app.pack_size;
+                                app.ensure_cursor_visible(th);
+                            }
+                            continue;
+                        }
+                        KeyCode::Right => {
+                            if app.input_mode == InputMode::Edit
+                                && app.current_pack + 1 < app.total_packs
+                            {
+                                app.current_pack += 1;
+                                app.scroll_top = 0;
+                                app.cursor_byte = app.current_pack * app.pack_size;
+                                app.ensure_cursor_visible(th);
+                            }
                             continue;
                         }
                         _ => {}
@@ -278,6 +317,13 @@ fn run(
                 }
 
                 app.cursor_focused = true;
+
+                // debounce rapid repeat of scroll keys
+                let is_scroll_key = matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Char('k') | KeyCode::Char('j'));
+                if is_scroll_key && debounce {
+                    continue;
+                }
+
                 match app.input_mode {
                 InputMode::Help => match key.code {
                     KeyCode::Esc | KeyCode::Char('q') => {
@@ -297,19 +343,22 @@ fn run(
                     }
                     _ => {}
                 }
-                    InputMode::SaveConfirm => handle_save(app, key.code, &mut should_break),
+                    InputMode::SaveConfirm => handle_save(app, key.code, data, filename, &mut should_break),
                     InputMode::SearchInput
                     | InputMode::StringSearchInput
                     | InputMode::GotoInput => {
-                        handle_input(app, key.code, mmap, th);
+                        handle_input(app, key.code, data, th);
                     }
-                    InputMode::Edit => handle_edit(app, key.code, mmap, th),
+                    InputMode::Edit => handle_edit(app, key.code, data, th),
                     InputMode::Normal => {
-                        handle_normal(app, key.code, mmap, th, max_rows, &mut should_break)
+                        handle_normal(app, key.code, data, th, max_rows, &mut should_break)
                     }
                 }
                 if should_break {
                     break;
+                }
+                if is_scroll_key {
+                    last_scroll = std::time::Instant::now();
                 }
             }
             _ => {}
@@ -318,28 +367,36 @@ fn run(
     Ok(())
 }
 
-fn handle_save(app: &mut App, code: KeyCode, do_break: &mut bool) {
+
+
+fn handle_save(app: &mut App, code: KeyCode, data: &mut [u8], filename: &str, do_break: &mut bool) {
     match code {
-        KeyCode::Left | KeyCode::Char('h') => app.save_selected = true,
-        KeyCode::Right | KeyCode::Char('l') => app.save_selected = false,
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.save_selected = !app.save_selected;
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.save_selected = !app.save_selected;
+        }
         KeyCode::Char('y') | KeyCode::Char('Y') => {
-            app.save_selected = true;
+            let _ = std::fs::write(filename, &*data);
+            app.dirty = false;
             *do_break = true;
         }
-        KeyCode::Char('n') | KeyCode::Char('N') => {
-            app.save_selected = false;
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             *do_break = true;
         }
-        KeyCode::Enter | KeyCode::Char(' ') => *do_break = true,
-        KeyCode::Esc => {
-            app.save_selected = false;
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            if app.save_selected {
+                let _ = std::fs::write(filename, &*data);
+                app.dirty = false;
+            }
             *do_break = true;
         }
         _ => {}
     }
 }
 
-fn handle_input(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
+fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
     match code {
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
@@ -358,7 +415,7 @@ fn handle_input(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
                             if app.search_active {
                                 let off = target * app.pack_size;
                                 if let Some(ref mut s) = app.search {
-                                    if let Some(idx) = s.find_after(&**mmap, off) {
+                                    if let Some(idx) = s.find_after(data, off) {
                                         app.jump_global(idx);
                                     }
                                 }
@@ -371,12 +428,21 @@ fn handle_input(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
                 }
                 InputMode::StringSearchInput => {
                     if let Some((label, bytes)) = search::parse_str_input(&buf) {
-                        app.do_search(&**mmap, false, bytes, None, label, th);
+                        let acc = search::Search::new_hex(bytes, app.pack_size, app.file_size, label);
+                        app.apply_search(acc, data, th);
                     }
                 }
                 InputMode::SearchInput => {
-                    if let Some((label, is_re, bytes, re)) = search::parse_input(&buf) {
-                        app.do_search(&**mmap, is_re, bytes, re, label, th);
+                    if let Some(kind) = search::parse_input(&buf) {
+                        let acc = match kind {
+                            search::SearchKind::Hex { bytes, label } => {
+                                search::Search::new_hex(bytes, app.pack_size, app.file_size, label)
+                            }
+                            search::SearchKind::Pat { pat, label } => {
+                                search::Search::new_pat(pat, app.pack_size, app.file_size, label)
+                            }
+                        };
+                        app.apply_search(acc, data, th);
                     }
                 }
                 _ => {}
@@ -392,7 +458,7 @@ fn handle_input(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
     }
 }
 
-fn handle_edit(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
+fn handle_edit(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
     match code {
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
@@ -403,35 +469,67 @@ fn handle_edit(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
                     if app.cursor_byte > 0 {
                         app.cursor_byte -= 1;
                         app.cursor_nibble = 1;
+                    } else if app.current_pack > 0 {
+                        app.current_pack -= 1;
+                        app.scroll_top = 0;
+                        app.cursor_byte = (app.current_pack + 1) * app.pack_size - 1;
+                        app.cursor_nibble = 1;
                     }
                 } else {
                     app.cursor_nibble = 0;
                 }
             } else if app.cursor_byte > 0 {
                 app.cursor_byte -= 1;
+            } else if app.current_pack > 0 {
+                app.current_pack -= 1;
+                app.scroll_top = 0;
+                app.cursor_byte = (app.current_pack + 1) * app.pack_size - 1;
             }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Right => {
+            let last = app.file_size.saturating_sub(1);
             if app.mode == DisplayMode::Hex {
                 if app.cursor_nibble == 0 {
                     app.cursor_nibble = 1;
-                } else if app.cursor_byte + 1 < app.file_size {
+                } else if app.cursor_byte < last {
                     app.cursor_byte += 1;
                     app.cursor_nibble = 0;
+                } else if app.current_pack + 1 < app.total_packs {
+                    app.current_pack += 1;
+                    app.scroll_top = 0;
+                    app.cursor_byte = app.current_pack * app.pack_size;
+                    app.cursor_nibble = 0;
                 }
-            } else if app.cursor_byte + 1 < app.file_size {
+            } else if app.cursor_byte < last {
                 app.cursor_byte += 1;
+            } else if app.current_pack + 1 < app.total_packs {
+                app.current_pack += 1;
+                app.scroll_top = 0;
+                app.cursor_byte = app.current_pack * app.pack_size;
             }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Up => {
-            app.cursor_byte = app.cursor_byte.saturating_sub(16);
+            if app.cursor_byte >= 16 {
+                app.cursor_byte -= 16;
+            } else if app.current_pack > 0 {
+                app.current_pack -= 1;
+                app.scroll_top = 0;
+                let rows = (app.pack_size / 16).saturating_sub(1);
+                app.cursor_byte = app.current_pack * app.pack_size + rows * 16 + app.cursor_byte;
+            }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Down => {
-            if app.cursor_byte + 16 < app.file_size {
+            let last = app.file_size.saturating_sub(1);
+            if app.cursor_byte + 16 <= last {
                 app.cursor_byte += 16;
+            } else if app.current_pack + 1 < app.total_packs {
+                app.current_pack += 1;
+                app.scroll_top = 0;
+                let over = app.cursor_byte + 16 - last - 1;
+                app.cursor_byte = (app.current_pack * app.pack_size + over).min(last);
             }
             app.ensure_cursor_visible(th);
         }
@@ -448,23 +546,23 @@ fn handle_edit(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
         }
         KeyCode::Enter => {
             if app.mode == DisplayMode::Ascii {
-                app.edit_char(&mut *mmap, '\n');
+                app.edit_char(data, '\n');
             }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Tab => {
             if app.mode == DisplayMode::Ascii {
-                app.edit_char(&mut *mmap, '\t');
+                app.edit_char(data, '\t');
             }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Char(c) => {
             if app.mode == DisplayMode::Hex {
                 if c.is_ascii_hexdigit() {
-                    app.edit_hex(&mut *mmap, c);
+                    app.edit_hex(data, c);
                 }
             } else {
-                app.edit_char(&mut *mmap, c);
+                app.edit_char(data, c);
             }
             app.ensure_cursor_visible(th);
         }
@@ -475,7 +573,7 @@ fn handle_edit(app: &mut App, code: KeyCode, mmap: &mut MmapMut, th: u16) {
 fn handle_normal(
     app: &mut App,
     code: KeyCode,
-    mmap: &mut MmapMut,
+    data: &mut [u8],
     th: u16,
     max_rows: usize,
     do_break: &mut bool,
@@ -546,7 +644,7 @@ fn handle_normal(
         }
         KeyCode::Right | KeyCode::Char('l') => {
             if app.search_active {
-                app.next_global(&**mmap);
+                app.next_global(data);
             } else if app.current_pack + 1 < app.total_packs {
                 app.current_pack += 1;
                 app.scroll_top = 0;
@@ -564,7 +662,7 @@ fn handle_normal(
             if app.search_active {
                 let off = target * app.pack_size;
                 if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(&**mmap, off) {
+                    if let Some(idx) = s.find_after(data, off) {
                         app.jump_global(idx);
                     }
                 }
@@ -578,7 +676,7 @@ fn handle_normal(
             if app.search_active {
                 let off = target * app.pack_size;
                 if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(&**mmap, off) {
+                    if let Some(idx) = s.find_after(data, off) {
                         app.jump_global(idx);
                     }
                 }
@@ -599,7 +697,7 @@ fn handle_normal(
         KeyCode::Home => {
             if app.search_active {
                 if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(&**mmap, 0) {
+                    if let Some(idx) = s.find_after(data, 0) {
                         app.jump_global(idx);
                     }
                 }
@@ -613,7 +711,7 @@ fn handle_normal(
                 let cur = app.current_pack * app.pack_size + app.scroll_top * 16;
                 let min = cur.saturating_sub(search::FIND_CHUNK);
                 if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(&**mmap, min) {
+                    if let Some(idx) = s.find_after(data, min) {
                         if idx != app.global_match_idx.unwrap_or(usize::MAX)
                             || min <= s.ranges[idx].0
                         {
@@ -631,7 +729,7 @@ fn handle_normal(
                 let cur = app.current_pack * app.pack_size + app.scroll_top * 16;
                 let min = cur + search::FIND_CHUNK;
                 if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(&**mmap, min) {
+                    if let Some(idx) = s.find_after(data, min) {
                         app.jump_global(idx);
                     }
                 }
@@ -825,19 +923,7 @@ fn utf8_char_style(ch: char) -> Style {
 }
 
 fn dim_color(c: Color) -> Color {
-    let (r, g, b) = match c {
-        Color::Rgb(r, g, b) => (r, g, b),
-        Color::Red => (205, 0, 0),
-        Color::Green => (0, 205, 0),
-        Color::Yellow => (205, 205, 0),
-        Color::Blue => (0, 0, 205),
-        Color::Magenta => (205, 0, 205),
-        Color::Cyan => (0, 205, 205),
-        Color::White => (205, 205, 205),
-        Color::DarkGray => (105, 105, 105),
-        Color::Black => (0, 0, 0),
-        _ => (128, 128, 128),
-    };
+    let (r, g, b) = color_config::color_rgb(c);
     Color::Rgb((r as u16 * 50 / 100) as u8, (g as u16 * 50 / 100) as u8, (b as u16 * 50 / 100) as u8)
 }
 
@@ -1133,10 +1219,17 @@ fn draw_help(f: &mut ratatui::Frame, app: &App, area: Rect) {
         "  g/Ctrl+G    Go to offset (hex)",
         "",
         "Search:",
-        "  f           Hex / regex search",
+        "  f           Hex / nibble pattern search",
         "  F           Plain string search",
         "  ↑↓ / ←→    Navigate matches",
         "  ESC         Clear search",
+        "",
+        "  Search syntax:",
+        "    4f2a        Exact hex bytes",
+        "    4x          Hi nibble=4, lo any (x=any nibble)",
+        "    [0-3]f      Hi nibble in 0-3, lo=f",
+        "    [A-F][0-3]  Both nibbles in range",
+        "    z            Any single byte (z = xx)",
         "",
         "Edit:",
         "  i           Enter edit mode",
@@ -1226,16 +1319,11 @@ fn draw_save_dialog(f: &mut ratatui::Frame, app: &App, area: Rect) {
         Paragraph::new(Span::raw("Save changes before quitting?")),
         Rect::new(dx + 2, dy + 1, dw - 4, 1),
     );
-    let ys = if app.save_selected {
-        Style::default().fg(Color::Black).bg(Color::White)
-    } else {
-        Style::default()
-    };
-    let ns = if !app.save_selected {
-        Style::default().fg(Color::Black).bg(Color::White)
-    } else {
-        Style::default()
-    };
+    let focus_style = COLOR_CFG.get()
+        .map(|c| c.sp_focused_button)
+        .unwrap_or_else(|| Style::default().fg(Color::Black).bg(Color::White));
+    let ys = if app.save_selected { focus_style } else { Style::default() };
+    let ns = if !app.save_selected { focus_style } else { Style::default() };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" Yes ", ys),
