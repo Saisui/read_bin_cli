@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use crate::search::Search;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +50,6 @@ pub struct App {
     pub search: Option<Search>,
     pub search_active: bool,
     pub pack_ranges: Vec<(usize, usize)>,
-    pub pack_set: HashSet<usize>,
     pub pack_match_idx: Option<usize>,
     pub global_match_idx: Option<usize>,
     pub input_buf: String,
@@ -84,7 +82,6 @@ impl App {
             search: None,
             search_active: false,
             pack_ranges: Vec::new(),
-            pack_set: HashSet::new(),
             pack_match_idx: None,
             global_match_idx: None,
             input_buf: String::new(),
@@ -131,16 +128,13 @@ impl App {
         self.search_active = false;
         self.search = None;
         self.pack_ranges.clear();
-        self.pack_set.clear();
         self.pack_match_idx = None;
         self.global_match_idx = None;
     }
 
     pub fn refresh_pack(&mut self) {
         if let Some(ref s) = self.search {
-            let (r, set) = s.pack_matches(self.current_pack);
-            self.pack_ranges = r;
-            self.pack_set = set;
+            self.pack_ranges = s.pack_matches(self.current_pack);
             self.pack_match_idx = self.global_match_idx
                 .and_then(|gi| s.ranges.get(gi).map(|&(st, _)| st))
                 .and_then(|st| self.pack_ranges.iter().position(|(s, e)| *s <= st && st < *e));

@@ -945,7 +945,7 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
             return sp(13);
         }
     }
-    if app.search_active && app.pack_set.contains(&off) {
+    if app.search_active && app.pack_ranges.iter().any(|&(s, e)| s <= off && off < e) {
         return sp(12);
     }
     if let (Some(a), Some(b)) = (app.sel_start, app.sel_end) {

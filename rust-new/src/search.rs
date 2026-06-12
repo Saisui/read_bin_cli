@@ -1,14 +1,17 @@
-use std::collections::HashSet;
-
 pub const FIND_CHUNK: usize = 1024 * 1024;
 const CHUNK: usize = 1024 * 1024;
+const L1_SIZE: usize = 1024 * 1024;
+const L2_SIZE: usize = 1024 * 1024 * 1024;
 
 pub struct Search {
     needle: Needle,
     pack_size: usize,
     file_size: usize,
     pub ranges: Vec<(usize, usize)>,
-    pub set: HashSet<usize>,
+    has_match_l0: Vec<u8>,
+    has_match_l1: Vec<u8>,
+    has_match_l2: Vec<u8>,
+    pub match_count: usize,
     scanned: usize,
     pub label: String,
 }
@@ -28,10 +31,24 @@ pub enum NibAtom {
 
 impl Search {
     pub fn new_hex(data: Vec<u8>, ps: usize, fs: usize, label: String) -> Self {
-        Self { needle: Needle::Lit(data), pack_size: ps, file_size: fs, ranges: Vec::new(), set: HashSet::new(), scanned: 0, label }
+        let l0 = (fs + ps - 1) / ps;
+        let l1 = (fs + L1_SIZE - 1) / L1_SIZE;
+        let l2 = (fs + L2_SIZE - 1) / L2_SIZE;
+        Self { needle: Needle::Lit(data), pack_size: ps, file_size: fs, ranges: Vec::new(),
+            has_match_l0: vec![0u8; (l0 + 7) / 8],
+            has_match_l1: vec![0u8; (l1 + 7) / 8],
+            has_match_l2: vec![0u8; (l2 + 7) / 8],
+            match_count: 0, scanned: 0, label }
     }
     pub fn new_pat(pat: Vec<NibAtom>, ps: usize, fs: usize, label: String) -> Self {
-        Self { needle: Needle::Pat(pat), pack_size: ps, file_size: fs, ranges: Vec::new(), set: HashSet::new(), scanned: 0, label }
+        let l0 = (fs + ps - 1) / ps;
+        let l1 = (fs + L1_SIZE - 1) / L1_SIZE;
+        let l2 = (fs + L2_SIZE - 1) / L2_SIZE;
+        Self { needle: Needle::Pat(pat), pack_size: ps, file_size: fs, ranges: Vec::new(),
+            has_match_l0: vec![0u8; (l0 + 7) / 8],
+            has_match_l1: vec![0u8; (l1 + 7) / 8],
+            has_match_l2: vec![0u8; (l2 + 7) / 8],
+            match_count: 0, scanned: 0, label }
     }
     pub fn has_more(&self) -> bool { self.scanned < self.file_size }
     pub fn extend(&mut self, mmap: &[u8], min_off: usize) -> bool {
@@ -40,10 +57,11 @@ impl Search {
         let mut found = false;
         while start < self.file_size && (start < min_off + CHUNK || self.ranges.is_empty()) {
             let end = (start + CHUNK).min(self.file_size);
-            match &self.needle {
+            let new_matches: Vec<(usize, usize)> = match &self.needle {
                 Needle::Lit(needle) => {
                     let nlen = needle.len();
                     if nlen == 0 { break; }
+                    let mut out = Vec::new();
                     let mut pos = start;
                     loop {
                         pos = match mmap[pos..end].windows(nlen).position(|w| w == needle.as_slice()) {
@@ -51,27 +69,33 @@ impl Search {
                         };
                         let me = pos + nlen;
                         if self.ranges.last().map_or(true, |(_, e)| *e <= pos) {
-                            self.ranges.push((pos, me));
-                            for o in pos..me { self.set.insert(o); }
+                            out.push((pos, me));
                         }
                         pos += 1;
                     }
+                    out
                 }
                 Needle::Pat(atoms) => {
                     let nbytes = atoms.len() / 2;
                     if nbytes == 0 { break; }
+                    let mut out = Vec::new();
                     let mut pos = start;
                     while pos + nbytes <= end {
                         if atoms_match(atoms, mmap, pos) {
                             let me = pos + nbytes;
                             if self.ranges.last().map_or(true, |(_, e)| *e <= pos) {
-                                self.ranges.push((pos, me));
-                                for o in pos..me { self.set.insert(o); }
+                                out.push((pos, me));
                             }
                         }
                         pos += 1;
                     }
+                    out
                 }
+            };
+            for &(s, e) in &new_matches {
+                self.ranges.push((s, e));
+                self.match_count += 1;
+                self.mark_all(s, e);
             }
             if !self.ranges.is_empty() && !found { found = true; }
             self.scanned = end;
@@ -84,24 +108,33 @@ impl Search {
         self.extend(mmap, min);
         self.ranges.iter().position(|(s, _)| *s >= min)
     }
-    pub fn pack_matches(&self, pi: usize) -> (Vec<(usize, usize)>, HashSet<usize>) {
+    pub fn pack_matches(&self, pi: usize) -> Vec<(usize, usize)> {
         let base = pi * self.pack_size;
         let end = (base + self.pack_size).min(self.file_size);
         let mut ranges = Vec::new();
-        let mut set = HashSet::new();
         for &(s, e) in &self.ranges {
             if s >= end { break; }
             if e > base {
-                let rs = s.max(base);
-                let re = e.min(end);
-                ranges.push((rs, re));
-                for o in rs..re { set.insert(o); }
+                ranges.push((s.max(base), e.min(end)));
             }
         }
-        (ranges, set)
+        ranges
     }
     pub fn idx_for_offset(&self, off: usize) -> Option<usize> {
         self.ranges.iter().position(|(s, e)| *s <= off && off < *e)
+    }
+
+    fn mark_all(&mut self, start: usize, end: usize) {
+        let ep = (end - 1).max(start);
+        for p in (start / self.pack_size)..=(ep / self.pack_size) {
+            self.has_match_l0[p / 8] |= 1 << (p % 8);
+        }
+        for p in (start / L1_SIZE)..=(ep / L1_SIZE) {
+            self.has_match_l1[p / 8] |= 1 << (p % 8);
+        }
+        for p in (start / L2_SIZE)..=(ep / L2_SIZE) {
+            self.has_match_l2[p / 8] |= 1 << (p % 8);
+        }
     }
 }
 
