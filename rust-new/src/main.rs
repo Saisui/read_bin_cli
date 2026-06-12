@@ -141,6 +141,9 @@ fn run(
         let since_scroll = now.duration_since(last_scroll);
         let debounce = since_scroll.as_millis() < 20;
 
+        // drain background search results
+        app.drain_search_rx();
+
         // clamp scroll
         let tr = app.total_rows();
         if app.scroll_top > tr.saturating_sub(max_rows) {
@@ -428,21 +431,29 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                 }
                 InputMode::StringSearchInput => {
                     if let Some((label, bytes)) = search::parse_str_input(&buf) {
+                        let needle = bytes.clone();
                         let acc = search::Search::new_hex(bytes, app.pack_size, app.file_size, label);
                         app.apply_search(acc, data, th);
+                        app.start_bg_search(needle, data.to_vec());
                     }
                 }
                 InputMode::SearchInput => {
                     if let Some(kind) = search::parse_input(&buf) {
-                        let acc = match kind {
+                        let (acc, needle) = match kind {
                             search::SearchKind::Hex { bytes, label } => {
-                                search::Search::new_hex(bytes, app.pack_size, app.file_size, label)
+                                let needle = bytes.clone();
+                                (search::Search::new_hex(bytes, app.pack_size, app.file_size, label), needle)
                             }
                             search::SearchKind::Pat { pat, label } => {
-                                search::Search::new_pat(pat, app.pack_size, app.file_size, label)
+                                let needle: Vec<u8> = pat.iter().flat_map(|a| match a {
+                                    search::NibAtom::Exact(n) => vec![*n],
+                                    _ => vec![],
+                                }).collect();
+                                (search::Search::new_pat(pat, app.pack_size, app.file_size, label), needle)
                             }
                         };
                         app.apply_search(acc, data, th);
+                        app.start_bg_search(needle, data.to_vec());
                     }
                 }
                 _ => {}

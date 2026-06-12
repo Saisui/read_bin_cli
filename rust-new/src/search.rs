@@ -1,7 +1,48 @@
+use std::sync::mpsc;
+use std::thread;
+
 pub const FIND_CHUNK: usize = 1024 * 1024;
 const CHUNK: usize = 1024 * 1024;
 const L1_SIZE: usize = 1024 * 1024;
 const L2_SIZE: usize = 1024 * 1024 * 1024;
+
+pub enum SearchEvent {
+    Chunk { matches: Vec<(usize, usize)> },
+    Done,
+}
+
+pub fn start_bg_search(
+    needle_bytes: Vec<u8>,
+    file_size: usize,
+    mmap: Vec<u8>,
+) -> mpsc::Receiver<SearchEvent> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let nlen = needle_bytes.len();
+        if nlen == 0 {
+            let _ = tx.send(SearchEvent::Done);
+            return;
+        }
+        let mut pos = 0;
+        while pos + nlen <= file_size {
+            let chunk_end = (pos + CHUNK).min(file_size);
+            let mut matches = Vec::new();
+            let mut p = pos;
+            while p + nlen <= chunk_end {
+                if mmap[p..p + nlen] == needle_bytes[..] {
+                    matches.push((p, p + nlen));
+                }
+                p += 1;
+            }
+            if !matches.is_empty() {
+                let _ = tx.send(SearchEvent::Chunk { matches });
+            }
+            pos = chunk_end;
+        }
+        let _ = tx.send(SearchEvent::Done);
+    });
+    rx
+}
 
 pub struct Search {
     needle: Needle,
@@ -124,7 +165,7 @@ impl Search {
         self.ranges.iter().position(|(s, e)| *s <= off && off < *e)
     }
 
-    fn mark_all(&mut self, start: usize, end: usize) {
+    pub fn mark_all(&mut self, start: usize, end: usize) {
         let ep = (end - 1).max(start);
         for p in (start / self.pack_size)..=(ep / self.pack_size) {
             self.has_match_l0[p / 8] |= 1 << (p % 8);

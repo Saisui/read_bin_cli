@@ -1,4 +1,5 @@
-use crate::search::Search;
+use std::sync::mpsc;
+use crate::search::{Search, SearchEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode { Ascii, Hex, Utf8 }
@@ -60,6 +61,7 @@ pub struct App {
     pub help_scroll: usize,
     pub help_rect: Option<(u16, u16, u16, u16)>, // x, y, w, h
     pub cursor_focused: bool,
+    pub search_rx: Option<mpsc::Receiver<SearchEvent>>,
 }
 
 impl App {
@@ -92,6 +94,7 @@ impl App {
             help_scroll: 0,
             help_rect: None,
             cursor_focused: true,
+            search_rx: None,
         }
     }
 
@@ -250,18 +253,57 @@ impl App {
     pub fn apply_search(&mut self, mut acc: Search, mmap: &[u8], h: u16) -> bool {
         let off = self.current_pack * self.pack_size + self.scroll_top * 16;
         acc.extend(mmap, off);
-        if !acc.ranges.is_empty() {
-            self.search_active = true;
+        self.search_active = true;
+        self.search = Some(acc);
+        if !self.search.as_ref().unwrap().ranges.is_empty() {
             self.global_match_idx = Some(0);
-            let (start, _) = acc.ranges[0];
+            let (start, _) = self.search.as_ref().unwrap().ranges[0];
             self.current_pack = start / self.pack_size;
             let row = (start % self.pack_size) / 16;
             let mr = self.max_rows(h);
             let tr = self.total_rows();
             self.scroll_top = row.saturating_sub(mr / 2).min(tr.saturating_sub(mr));
-            self.search = Some(acc);
-            self.refresh_pack();
-            true
-        } else { false }
+        }
+        self.refresh_pack();
+        true
+    }
+
+    pub fn start_bg_search(&mut self, needle: Vec<u8>, data: Vec<u8>) {
+        let file_size = self.file_size;
+        let rx = crate::search::start_bg_search(needle, file_size, data);
+        self.search_rx = Some(rx);
+    }
+
+    pub fn drain_search_rx(&mut self) {
+        let events: Vec<SearchEvent> = {
+            let rx = match self.search_rx { Some(ref rx) => rx, None => return };
+            let mut events = Vec::new();
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(_) => break,
+                }
+            }
+            events
+        };
+        for event in events {
+            match event {
+                SearchEvent::Chunk { matches } => {
+                    if let Some(ref mut s) = self.search {
+                        for &(start, end) in &matches {
+                            if s.ranges.last().map_or(true, |(_, e)| *e <= start) {
+                                s.ranges.push((start, end));
+                                s.match_count += 1;
+                                s.mark_all(start, end);
+                            }
+                        }
+                    }
+                }
+                SearchEvent::Done => {
+                    self.search_rx = None;
+                }
+            }
+        }
+        self.refresh_pack();
     }
 }
