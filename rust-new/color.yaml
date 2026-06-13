@@ -1,17 +1,17 @@
-null:      { fg: white, bg: red }
-control:   { fg: white, bg: blue }
-blank:     { fg: black, bg: cyan }
-ascii:     { fg: null }
-hex:       { fg: black, bg: green }
-head2:     { fg: white, bg: blue }
-head3:     { fg: white, bg: magenta }
-head4:     { fg: white, bg: red }
-tail:      { fg: black, bg: yellow }
-unknown:   { fg: white, bg: red }
-cursor:    { fg: black, bg: yellow }
-selection: { fg: yellow, bg: green }
-found:     { fg: black, bg: yellow }
-focused_button: { fg: black, bg: white }
+null:      { fg: auto, bg: red }
+control:   { fg: auto, bg: blue }
+blank:     { fg: auto, bg: cyan }
+ascii:     { fg: auto }
+hex:       { fg: auto, bg: green }
+head2:     { fg: auto, bg: blue }
+head3:     { fg: auto, bg: magenta }
+head4:     { fg: auto, bg: red }
+tail:      { fg: auto, bg: yellow }
+unknown:   { fg: auto, bg: red }
+cursor:    { fg: auto, bg: yellow }
+selection: { fg: auto, bg: green }
+found:     { fg: auto, bg: yellow }
+focused_button: { fg: auto, bg: white }
 
 dim:
   global: 0.8

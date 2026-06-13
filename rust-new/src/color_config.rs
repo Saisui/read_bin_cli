@@ -5,6 +5,14 @@ use std::sync::OnceLock;
 
 type Rgb = [u8; 3];
 
+/// fg: auto 解析后的哨兵值，标记需要在渲染时实时计算
+pub const AUTO_FG_SENTINEL: Color = Color::Rgb(1, 1, 1);
+
+pub fn luminance(c: Color) -> f64 {
+    let (r, g, b) = color_rgb(c);
+    0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64
+}
+
 // ─── terminal palette ────────────────────────────────────────
 static TERM_PALETTE: OnceLock<HashMap<usize, [u8; 3]>> = OnceLock::new();
 
@@ -74,20 +82,20 @@ pub fn color_rgb(c: Color) -> (u8, u8, u8) {
 
 // ─── embedded defaults ───────────────────────────────────────
 const DEFAULT_YAML: &str = r#"
-null:      { fg: white, bg: red }
-control:   { fg: white, bg: blue }
-blank:     { fg: black, bg: cyan }
-ascii:     { fg: null }
-hex:       { fg: black, bg: green }
-head2:     { fg: white, bg: blue }
-head3:     { fg: white, bg: magenta }
-head4:     { fg: white, bg: red }
-tail:      { fg: black, bg: yellow }
-unknown:   { fg: white, bg: red }
-cursor:    { fg: black, bg: yellow }
-selection: { fg: yellow, bg: green }
-found:     { fg: black, bg: yellow }
-focused_button: { fg: black, bg: white }
+null:      { fg: auto, bg: red }
+control:   { fg: auto, bg: blue }
+blank:     { fg: auto, bg: cyan }
+ascii:     { fg: auto }
+hex:       { fg: auto, bg: green }
+head2:     { fg: auto, bg: blue }
+head3:     { fg: auto, bg: magenta }
+head4:     { fg: auto, bg: red }
+tail:      { fg: auto, bg: yellow }
+unknown:   { fg: auto, bg: red }
+cursor:    { fg: auto, bg: yellow }
+selection: { fg: auto, bg: green }
+found:     { fg: auto, bg: yellow }
+focused_button: { fg: auto, bg: white }
 
 dim:
   global: 0.8
@@ -128,17 +136,25 @@ fn parse_style_val(val: &str) -> Option<Style> {
     }
     let inner = val[brace_start + 1..brace_end].trim();
     let mut s = Style::default();
+    let mut fg_auto = false;
     for part in split_top_level(inner, ',') {
         if let Some((k, v)) = part.split_once(':') {
             let k = k.trim();
             let v = v.trim();
-            if let Some(c) = parse_color(v) {
+            if k == "fg" && v == "auto" {
+                fg_auto = true;
+            } else if let Some(c) = parse_color(v) {
                 match k {
                     "fg" => s = s.fg(c),
                     "bg" => s = s.bg(c),
                     _ => {}
                 }
             }
+        }
+    }
+    if fg_auto {
+        if s.bg.is_some() {
+            s = s.fg(AUTO_FG_SENTINEL);
         }
     }
     Some(s)
@@ -175,6 +191,7 @@ fn parse_color(v: &str) -> Option<Color> {
         "cyan" => Some(Color::Cyan),
         "white" => Some(Color::White),
         "darkgray" | "dark_gray" => Some(Color::DarkGray),
+        "auto" => None,
         _ => parse_rgb(v),
     }
 }

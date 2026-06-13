@@ -929,28 +929,42 @@ fn dim_bg_10pct(s: Style) -> Style {
     COLOR_CFG.get().map(|c| c.dim_bg(s)).unwrap_or(s)
 }
 
-fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> Style {
-    if app.cursor_focused && app.cursor_byte == off {
-        return sp(16);
-    }
-    if let Some((ms, me)) = mr {
-        if ms <= off && off < me {
-            return sp(13);
+fn resolve_auto_fg(s: Style) -> Style {
+    if s.fg == Some(color_config::AUTO_FG_SENTINEL) {
+        match s.bg {
+            Some(bg) => {
+                let fg = if color_config::luminance(bg) > 128.0 {
+                    Color::Black
+                } else {
+                    Color::White
+                };
+                s.fg(fg)
+            }
+            None => s,
         }
+    } else {
+        s
     }
-    if app.search_active && app.pack_ranges.iter().any(|&(s, e)| s <= off && off < e) {
-        return sp(12);
-    }
-    if let (Some(a), Some(b)) = (app.sel_start, app.sel_end) {
+}
+
+fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> Style {
+    let s = if app.cursor_focused && app.cursor_byte == off {
+        sp(16)
+    } else if let Some((ms, me)) = mr {
+        if ms <= off && off < me { sp(13) } else { base }
+    } else if app.search_active && app.pack_ranges.iter().any(|&(s, e)| s <= off && off < e) {
+        sp(12)
+    } else if let (Some(a), Some(b)) = (app.sel_start, app.sel_end) {
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
         if off >= lo && off <= hi {
-            return if off == a { sp(18) } else { sp(17) };
-        }
-    }
-    if app.input_mode == InputMode::Edit {
-        return dim_style(base);
-    }
-    base
+            if off == a { sp(18) } else { sp(17) }
+        } else { base }
+    } else if app.input_mode == InputMode::Edit {
+        dim_style(base)
+    } else {
+        base
+    };
+    resolve_auto_fg(s)
 }
 
 fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
