@@ -630,14 +630,14 @@ fn handle_normal(
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if app.search_active {
-                nav_pack_match(app, -1);
+                app.prev_global();
             } else {
                 app.scroll_top = app.scroll_top.saturating_sub(1);
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.search_active {
-                nav_pack_match(app, 1);
+                app.next_global(data);
             } else {
                 let tr = app.total_rows();
                 if app.scroll_top + max_rows < tr {
@@ -647,7 +647,7 @@ fn handle_normal(
         }
         KeyCode::Left | KeyCode::Char('h') => {
             if app.search_active {
-                app.prev_global();
+                app.prev_page_match();
             } else if app.current_pack > 0 {
                 app.current_pack -= 1;
                 app.scroll_top = 0;
@@ -655,7 +655,7 @@ fn handle_normal(
         }
         KeyCode::Right | KeyCode::Char('l') => {
             if app.search_active {
-                app.next_global(data);
+                app.next_page_match();
             } else if app.current_pack + 1 < app.total_packs {
                 app.current_pack += 1;
                 app.scroll_top = 0;
@@ -751,24 +751,6 @@ fn handle_normal(
         }
         _ => {}
     }
-}
-
-fn nav_pack_match(app: &mut App, delta: i32) {
-    if app.pack_ranges.is_empty() {
-        return;
-    }
-    let len = app.pack_ranges.len();
-    let cur = app.pack_match_idx.unwrap_or(0);
-    let ni = if delta > 0 { (cur + 1) % len } else { (cur + len - 1) % len };
-    app.pack_match_idx = Some(ni);
-    let (ms, _) = app.pack_ranges[ni];
-    if let Some(ref s) = app.search {
-        if let Some(gi) = s.idx_for_offset(ms) {
-            app.global_match_idx = Some(gi);
-        }
-    }
-    let row = (ms % app.pack_size) / 16;
-    app.scroll_top = row.saturating_sub(12);
 }
 
 fn parse_hex_input(s: &str) -> Option<usize> {

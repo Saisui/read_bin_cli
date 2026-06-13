@@ -176,6 +176,32 @@ impl App {
         self.jump_global(cur - 1)
     }
 
+    pub fn next_page_match(&mut self) -> bool {
+        let cur_pack = self.current_pack;
+        if let Some(s) = self.search.as_ref() {
+            for idx in 0..s.ranges.len() {
+                let (start, _) = s.ranges[idx];
+                if start / self.pack_size > cur_pack {
+                    return self.jump_global(idx);
+                }
+            }
+        }
+        false
+    }
+
+    pub fn prev_page_match(&mut self) -> bool {
+        let cur_pack = self.current_pack;
+        if let Some(s) = self.search.as_ref() {
+            for idx in (0..s.ranges.len()).rev() {
+                let (start, _) = s.ranges[idx];
+                if start / self.pack_size < cur_pack {
+                    return self.jump_global(idx);
+                }
+            }
+        }
+        false
+    }
+
     pub fn ensure_cursor_visible(&mut self, h: u16) {
         let pk = self.cursor_byte / self.pack_size;
         if pk != self.current_pack { self.current_pack = pk; }
