@@ -1112,7 +1112,13 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
             for t in 0..cross_row_tail {
                 let p = off - cross_row_tail + t; // byte offset of the tail byte
                 let go = base_off + p;
-                let ts = resolve(app, go, sp(3), mr);
+                let tail_b = data[p];
+                let ts = if app.is_color256 {
+                    let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
+                    resolve(app, go, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
+                } else {
+                    resolve(app, go, sp(3), mr)
+                };
                 spans.push(Span::styled("··".to_string(), ts));
             }
             let segs = utf8::decode_row(data, off, rem, cross_row_tail);
@@ -1148,7 +1154,10 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             prev_type = cur_type;
                         }
                         let dim = same_count % 2 == 1;
-                        let base = if (*ch as u32) < 0x20 {
+                        let base = if app.is_color256 {
+                            let fg = if indexed_luminance(*ch as u8) > 128.0 { Color::Black } else { Color::White };
+                            Style::default().bg(Color::Indexed(*ch as u8)).fg(fg)
+                        } else if (*ch as u32) < 0x20 {
                             byte_style(*ch as u8, DisplayMode::Ascii)
                         } else {
                             utf8_char_style(*ch)
@@ -1163,7 +1172,13 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                                 break;
                             }
                             let cgo = base_off + off + pos + ci;
-                            let ts = resolve(app, cgo, sp(3), mr);
+                            let tail_b = data[off + pos + ci];
+                            let ts = if app.is_color256 {
+                                let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
+                                resolve(app, cgo, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
+                            } else {
+                                resolve(app, cgo, sp(3), mr)
+                            };
                             spans.push(Span::styled("··".to_string(), ts));
                         }
                     }
@@ -1171,8 +1186,12 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let bo = off + pos;
                         let go = base_off + bo;
                         let b = data[bo];
-                        let cls = utf8::byte_class(b);
-                        let base = utf8_cls_style(cls);
+                        let base = if app.is_color256 {
+                            let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
+                            Style::default().bg(Color::Indexed(b)).fg(fg)
+                        } else {
+                            utf8_cls_style(utf8::byte_class(b))
+                        };
                         let sty = resolve(app, go, base, mr);
                         spans.push(Span::styled(format!("{:02x}", b), sty));
                     }
