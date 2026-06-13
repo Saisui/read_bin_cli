@@ -625,6 +625,7 @@ fn handle_normal(
         }
         KeyCode::Char('?') => { app.input_mode = InputMode::Help; app.help_scroll = 0; }
         KeyCode::Char('m') => app.mode = app.mode.next(),
+        KeyCode::Char('n') => app.is_color256 = !app.is_color256,
         KeyCode::Char('i') => {
             app.input_mode = InputMode::Edit;
             if app.cursor_byte == 0 && !app.dirty {
@@ -847,7 +848,7 @@ fn grad_color(i: usize, total: usize) -> Color {
 /// 字节显示文本
 ///
 /// ASCII 模式：可打印字符显示为 `c `，不可打印显示为 hex 或符号（`.`/`⏎`/`·`）。
-/// HEX/UTF8/Color256 模式：统一显示为 2 位 hex。
+/// HEX/UTF8 模式：统一显示为 2 位 hex。
 fn byte_disp(b: u8, mode: DisplayMode) -> String {
     match mode {
         DisplayMode::Ascii => {
@@ -868,7 +869,6 @@ fn byte_disp(b: u8, mode: DisplayMode) -> String {
 ///
 /// 相同类型的连续字节交替显示亮/暗背景，增强可读性。
 /// 返回值 0-8 代表不同字节类别。
-/// Color256 模式返回 0（每字节有独特背景色，不需要交替 dim）。
 fn byte_type_group(b: u8, mode: DisplayMode) -> u8 {
     match mode {
         DisplayMode::Ascii => {
@@ -889,7 +889,6 @@ fn byte_type_group(b: u8, mode: DisplayMode) -> u8 {
             else if (0x80..=0xbf).contains(&b) { 6 }
             else { 7 }
         }
-        DisplayMode::Color256 => 0,
         _ => 0,
     }
 }
@@ -916,11 +915,6 @@ fn byte_style(b: u8, mode: DisplayMode) -> Style {
             else { sp(8) }
         }
         DisplayMode::Utf8 => sp(5),
-        DisplayMode::Color256 => {
-            let bg = Color::Indexed(b);
-            let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
-            Style::default().bg(bg).fg(fg)
-        }
     }
 }
 
@@ -1205,7 +1199,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 let dim = same_count % 2 == 1;
                 if app.input_mode == InputMode::Edit && app.cursor_byte == go {
                     let d = byte_disp(b, app.mode);
-                    let non_cursor_style = if app.mode == DisplayMode::Color256 {
+                    let non_cursor_style = if app.is_color256 {
                         let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
                         Style::default().bg(Color::Indexed(b)).fg(fg)
                     } else {
@@ -1230,7 +1224,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 }
                 let base = byte_style(b, app.mode);
                 let sty = resolve(app, go, base, mr);
-                let final_sty = if app.mode == DisplayMode::Color256 { sty } else if dim { dim_bg_10pct(sty) } else { sty };
+                let final_sty = if app.is_color256 { sty } else if dim { dim_bg_10pct(sty) } else { sty };
                 spans.push(Span::styled(byte_disp(b, app.mode), final_sty));
             }
         }
@@ -1255,7 +1249,6 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                         DisplayMode::Ascii => "[EDIT ASCII]",
                         DisplayMode::Utf8 => "[EDIT UTF8]",
                         DisplayMode::Hex => "[EDIT HEX]",
-                        DisplayMode::Color256 => "[EDIT 256]",
                     },
                     byte_info
                 ))),
@@ -1295,14 +1288,15 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 }
             }
             let dirty = if app.dirty { " [MODIFIED]" } else { "" };
+            let c256 = if app.is_color256 { " [256]" } else { "" };
             // hex width based on file size
             let hex_w = if app.file_size <= 0xff { 2 }
                 else if app.file_size <= 0xffff { 4 }
                 else if app.file_size <= 0xffffff { 6 }
                 else { 8 };
             let s = format!(
-                "{}{}  @{:0width$x}  pack {}/{}  Ctrl+H:help",
-                app.mode.label(), dirty, app.cursor_byte,
+                "{}{}{}  @{:0width$x}  pack {}/{}  Ctrl+H:help",
+                app.mode.label(), dirty, c256, app.cursor_byte,
                 app.current_pack + 1, app.total_packs,
                 width = hex_w
             );
@@ -1346,12 +1340,6 @@ fn draw_help(f: &mut ratatui::Frame, app: &App, area: Rect) {
         "    [A-F][0-3]  Both nibbles in range",
         "    z            Any single byte (z = xx)",
         "",
-        "Display modes (m):",
-        "  ASCII  - Printable chars, else hex",
-        "  HEX    - All bytes as hex",
-        "  UTF8   - Decoded UTF-8 characters",
-        "  256    - Byte value as 256-color bg",
-        "",
         "Edit:",
         "  i           Enter edit mode",
         "  ESC         Exit edit mode",
@@ -1365,7 +1353,8 @@ fn draw_help(f: &mut ratatui::Frame, app: &App, area: Rect) {
         "  Alt+K       Selection end",
         "",
         "Other:",
-        "  m / Alt+M   Toggle mode",
+        "  m / Alt+M   Toggle mode (ASCII/HEX/UTF8)",
+        "  n           Toggle 256-color background",
         "  Ctrl+H / ?  This help",
         "  Ctrl+Z / Y  Undo / Redo",
         "  Ctrl+Q / q  Quit",
