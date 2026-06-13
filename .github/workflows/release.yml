@@ -42,6 +42,8 @@ jobs:
 
       - name: Build
         run: cd rust && cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
 
       - name: Rename binary
         shell: bash
