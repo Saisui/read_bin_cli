@@ -1222,7 +1222,12 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     }
                     continue;
                 }
-                let base = byte_style(b, app.mode);
+                let base = if app.is_color256 {
+                    let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
+                    Style::default().bg(Color::Indexed(b)).fg(fg)
+                } else {
+                    byte_style(b, app.mode)
+                };
                 let sty = resolve(app, go, base, mr);
                 let final_sty = if app.is_color256 { sty } else if dim { dim_bg_10pct(sty) } else { sty };
                 spans.push(Span::styled(byte_disp(b, app.mode), final_sty));
