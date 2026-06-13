@@ -41,15 +41,15 @@ jobs:
         run: sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build
-        run: cd rust-min && cargo build --release --target ${{ matrix.target }}
+        run: cd rust && cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
         shell: bash
         run: |
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            cp rust-min/target/${{ matrix.target }}/release/read-bin.exe read-bin-${{ matrix.name }}.exe
+            cp rust/target/${{ matrix.target }}/release/read-bin.exe read-bin-${{ matrix.name }}.exe
           else
-            cp rust-min/target/${{ matrix.target }}/release/read-bin read-bin-${{ matrix.name }}
+            cp rust/target/${{ matrix.target }}/release/read-bin read-bin-${{ matrix.name }}
           fi
 
       - uses: actions/upload-artifact@v4
