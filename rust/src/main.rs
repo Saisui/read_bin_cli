@@ -847,7 +847,7 @@ fn grad_color(i: usize, total: usize) -> Color {
 /// 字节显示文本
 ///
 /// ASCII 模式：可打印字符显示为 `c `，不可打印显示为 hex 或符号（`.`/`⏎`/`·`）。
-/// HEX/UTF8 模式：统一显示为 2 位 hex。
+/// HEX/UTF8/Color256 模式：统一显示为 2 位 hex。
 fn byte_disp(b: u8, mode: DisplayMode) -> String {
     match mode {
         DisplayMode::Ascii => {
@@ -868,6 +868,7 @@ fn byte_disp(b: u8, mode: DisplayMode) -> String {
 ///
 /// 相同类型的连续字节交替显示亮/暗背景，增强可读性。
 /// 返回值 0-8 代表不同字节类别。
+/// Color256 模式返回 0（每字节有独特背景色，不需要交替 dim）。
 fn byte_type_group(b: u8, mode: DisplayMode) -> u8 {
     match mode {
         DisplayMode::Ascii => {
@@ -888,6 +889,7 @@ fn byte_type_group(b: u8, mode: DisplayMode) -> u8 {
             else if (0x80..=0xbf).contains(&b) { 6 }
             else { 7 }
         }
+        DisplayMode::Color256 => 0,
         _ => 0,
     }
 }
@@ -914,6 +916,11 @@ fn byte_style(b: u8, mode: DisplayMode) -> Style {
             else { sp(8) }
         }
         DisplayMode::Utf8 => sp(5),
+        DisplayMode::Color256 => {
+            let bg = Color::Indexed(b);
+            let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
+            Style::default().bg(bg).fg(fg)
+        }
     }
 }
 
@@ -972,6 +979,40 @@ fn dim_style(s: Style) -> Style {
 /// 按 ColorConfig 配置压暗背景色（交替 dim 效果）
 fn dim_bg_10pct(s: Style) -> Style {
     COLOR_CFG.get().map(|c| c.dim_bg(s)).unwrap_or(s)
+}
+
+const STD_COLORS: [(u8,u8,u8); 8] = [
+    (0,0,0), (170,0,0), (0,170,0), (170,85,0),
+    (0,0,170), (170,0,170), (0,170,170), (170,170,170),
+];
+const BRIGHT_COLORS: [(u8,u8,u8); 8] = [
+    (85,85,85), (255,85,85), (85,255,85), (255,255,85),
+    (85,85,255), (255,85,255), (85,255,255), (255,255,255),
+];
+
+fn cube_rgb(idx: u8) -> (u8,u8,u8) {
+    let i = (idx - 16) as usize;
+    let r = i / 36; let g = (i / 6) % 6; let b = i % 6;
+    (if r==0 {0} else {55+r*40} as u8, if g==0 {0} else {55+g*40} as u8, if b==0 {0} else {55+b*40} as u8)
+}
+
+fn gray_rgb(idx: u8) -> (u8,u8,u8) {
+    let v = 8 + (idx - 232) * 10;
+    (v, v, v)
+}
+
+fn indexed_rgb(idx: u8) -> (u8,u8,u8) {
+    match idx {
+        0..=7 => STD_COLORS[idx as usize],
+        8..=15 => BRIGHT_COLORS[(idx-8) as usize],
+        16..=231 => cube_rgb(idx),
+        _ => gray_rgb(idx),
+    }
+}
+
+fn indexed_luminance(idx: u8) -> f64 {
+    let (r,g,b) = indexed_rgb(idx);
+    0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64
 }
 
 /// 解析 fg: auto 哨兵 → 实际前景色
@@ -1164,17 +1205,23 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 let dim = same_count % 2 == 1;
                 if app.input_mode == InputMode::Edit && app.cursor_byte == go {
                     let d = byte_disp(b, app.mode);
+                    let non_cursor_style = if app.mode == DisplayMode::Color256 {
+                        let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
+                        Style::default().bg(Color::Indexed(b)).fg(fg)
+                    } else {
+                        dim_style(byte_style(b, app.mode))
+                    };
                     match (app.mode, app.cursor_nibble) {
                         (DisplayMode::Hex, 0) => {
                             let c0: String = d.chars().take(1).collect();
                             let c1: String = d.chars().skip(1).take(1).collect();
                             spans.push(Span::styled(c0, sp(16)));
-                            spans.push(Span::styled(c1, dim_style(byte_style(b, app.mode))));
+                            spans.push(Span::styled(c1, non_cursor_style));
                         }
                         (DisplayMode::Hex, 1) => {
                             let c0: String = d.chars().take(1).collect();
                             let c1: String = d.chars().skip(1).take(1).collect();
-                            spans.push(Span::styled(c0, dim_style(byte_style(b, app.mode))));
+                            spans.push(Span::styled(c0, non_cursor_style));
                             spans.push(Span::styled(c1, sp(16)));
                         }
                         _ => spans.push(Span::styled(d, sp(16))),
@@ -1183,7 +1230,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 }
                 let base = byte_style(b, app.mode);
                 let sty = resolve(app, go, base, mr);
-                let final_sty = if dim { dim_bg_10pct(sty) } else { sty };
+                let final_sty = if app.mode == DisplayMode::Color256 { sty } else if dim { dim_bg_10pct(sty) } else { sty };
                 spans.push(Span::styled(byte_disp(b, app.mode), final_sty));
             }
         }
@@ -1208,6 +1255,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                         DisplayMode::Ascii => "[EDIT ASCII]",
                         DisplayMode::Utf8 => "[EDIT UTF8]",
                         DisplayMode::Hex => "[EDIT HEX]",
+                        DisplayMode::Color256 => "[EDIT 256]",
                     },
                     byte_info
                 ))),
@@ -1297,6 +1345,12 @@ fn draw_help(f: &mut ratatui::Frame, app: &App, area: Rect) {
         "    [0-3]f      Hi nibble in 0-3, lo=f",
         "    [A-F][0-3]  Both nibbles in range",
         "    z            Any single byte (z = xx)",
+        "",
+        "Display modes (m):",
+        "  ASCII  - Printable chars, else hex",
+        "  HEX    - All bytes as hex",
+        "  UTF8   - Decoded UTF-8 characters",
+        "  256    - Byte value as 256-color bg",
         "",
         "Edit:",
         "  i           Enter edit mode",

@@ -7,18 +7,19 @@ use crate::search::{Search, SearchEvent};
 
 /// 显示模式：ASCII 字符 / HEX 十六进制 / UTF-8 解码
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplayMode { Ascii, Hex, Utf8 }
+pub enum DisplayMode { Ascii, Hex, Utf8, Color256 }
 
 impl DisplayMode {
     pub fn next(self) -> Self {
         match self {
             Self::Ascii => Self::Hex,
             Self::Hex => Self::Utf8,
-            Self::Utf8 => Self::Ascii,
+            Self::Utf8 => Self::Color256,
+            Self::Color256 => Self::Ascii,
         }
     }
     pub fn label(self) -> &'static str {
-        match self { Self::Ascii => "[ASCII]", Self::Hex => "[HEX]", Self::Utf8 => "[UTF8]" }
+        match self { Self::Ascii => "[ASCII]", Self::Hex => "[HEX]", Self::Utf8 => "[UTF8]", Self::Color256 => "[256]" }
     }
 }
 
