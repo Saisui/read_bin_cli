@@ -1,13 +1,13 @@
-use std::collections::HashSet;
+/// 应用状态管理模块
+///
+/// 管理文件分页、光标位置、显示模式、搜索状态、撤销/重做栈。
+/// 不直接处理渲染或输入事件，由 main.rs 驱动。
+use std::sync::mpsc;
+use crate::search::{Search, SearchEvent};
 
-use crate::search::SearchAccumulator;
-
+/// 显示模式：ASCII 字符 / HEX 十六进制 / UTF-8 解码
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplayMode {
-    Ascii,
-    Hex,
-    Utf8,
-}
+pub enum DisplayMode { Ascii, Hex, Utf8 }
 
 impl DisplayMode {
     pub fn next(self) -> Self {
@@ -17,22 +17,18 @@ impl DisplayMode {
             Self::Utf8 => Self::Ascii,
         }
     }
-
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Ascii => "[ASCII]",
-            Self::Hex => "[HEX]",
-            Self::Utf8 => "[UTF8]",
-        }
+        match self { Self::Ascii => "[ASCII]", Self::Hex => "[HEX]", Self::Utf8 => "[UTF8]" }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EditKind {
-    Hex,
-    Ascii,
-}
-
+/// 输入状态机
+///
+/// Normal: 浏览模式（快捷键导航）
+/// Edit: 字节编辑模式
+/// SearchInput / StringSearchInput / GotoInput: 文本输入模式
+/// SaveConfirm: 退出确认弹窗
+/// Help: 帮助弹窗
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
@@ -44,12 +40,21 @@ pub enum InputMode {
     Help,
 }
 
+/// 撤销/重做条目：记录单字节修改
 pub struct UndoEntry {
     pub offset: usize,
     pub old: u8,
     pub new: u8,
 }
 
+/// 核心应用状态
+///
+/// - file_size / pack_size / total_packs: 文件分页信息（每 pack 4096 字节）
+/// - current_pack / scroll_top: 当前可见 pack 和滚动偏移
+/// - cursor_byte / cursor_nibble: 光标位置（字节偏移 + hex 模式的半字节）
+/// - search / pack_ranges: 搜索状态和当前 pack 内的匹配范围
+/// - undo_stack / redo_stack: 编辑历史
+/// - sel_start / sel_end: 选区范围
 pub struct App {
     pub file_size: usize,
     pub pack_size: usize,
@@ -59,47 +64,40 @@ pub struct App {
     pub mode: DisplayMode,
     pub input_mode: InputMode,
     pub filename: String,
-
-    // Edit state
-    pub edit_kind: EditKind,
     pub cursor_byte: usize,
     pub cursor_nibble: usize,
     pub dirty: bool,
-
-    // Undo/redo
     pub undo_stack: Vec<UndoEntry>,
     pub redo_stack: Vec<UndoEntry>,
-
-    // Search state
-    pub search: Option<SearchAccumulator>,
+    pub search: Option<Search>,
     pub search_active: bool,
     pub pack_ranges: Vec<(usize, usize)>,
-    pub pack_set: HashSet<usize>,
     pub pack_match_idx: Option<usize>,
     pub global_match_idx: Option<usize>,
-
-    // Input buffer
     pub input_buf: String,
     pub input_prompt: String,
-
-    // Save confirm
     pub save_selected: bool,
+    pub sel_start: Option<usize>,
+    pub sel_end: Option<usize>,
+    pub help_scroll: usize,
+    pub help_rect: Option<(u16, u16, u16, u16)>, // x, y, w, h
+    pub cursor_focused: bool,
+    pub search_rx: Option<mpsc::Receiver<SearchEvent>>,
 }
 
 impl App {
+    /// 创建新应用实例，pack 大小固定为 4096 字节
     pub fn new(file_size: usize, filename: String) -> Self {
         let pack_size = 4096;
-        let total_packs = (file_size + pack_size - 1) / pack_size;
         Self {
             file_size,
             pack_size,
-            total_packs,
+            total_packs: (file_size + pack_size - 1) / pack_size,
             current_pack: 0,
             scroll_top: 0,
             mode: DisplayMode::Ascii,
             input_mode: InputMode::Normal,
             filename,
-            edit_kind: EditKind::Hex,
             cursor_byte: 0,
             cursor_nibble: 0,
             dirty: false,
@@ -108,175 +106,196 @@ impl App {
             search: None,
             search_active: false,
             pack_ranges: Vec::new(),
-            pack_set: HashSet::new(),
             pack_match_idx: None,
             global_match_idx: None,
             input_buf: String::new(),
             input_prompt: String::new(),
             save_selected: false,
+            sel_start: None,
+            sel_end: None,
+            help_scroll: 0,
+            help_rect: None,
+            cursor_focused: true,
+            search_rx: None,
         }
     }
 
-    pub fn max_data_rows(&self, terminal_height: u16) -> usize {
-        (terminal_height as usize).saturating_sub(4)
+    /// 终端高度可显示的最大行数（减去 3 行头部 + 1 行状态栏）
+    pub fn max_rows(&self, h: u16) -> usize {
+        (h as usize).saturating_sub(4)
     }
 
+    /// 当前 pack 的实际数据长度（最后一 pack 可能不满 4096）
     pub fn data_len(&self) -> usize {
-        std::cmp::min(
-            self.pack_size,
-            self.file_size - self.current_pack * self.pack_size,
-        )
+        self.pack_size.min(self.file_size - self.current_pack * self.pack_size)
     }
 
+    /// 当前 pack 的总行数（每行 16 字节）
     pub fn total_rows(&self) -> usize {
         (self.data_len() + 15) / 16
     }
 
-    pub fn refresh_pack_display(&mut self) {
-        if let Some(ref search) = self.search {
-            let (ranges, set) = search.get_current_pack_matches(self.current_pack);
-            self.pack_ranges = ranges;
-            self.pack_set = set;
-            if let Some(gidx) = self.global_match_idx {
-                if gidx < search.match_ranges.len() {
-                    let (global_start, _) = search.match_ranges[gidx];
-                    self.pack_match_idx = self
-                        .pack_ranges
-                        .iter()
-                        .position(|(s, e)| *s <= global_start && global_start < *e);
-                    return;
-                }
+    /// 将字节数格式化为人类可读大小（如 "1.5KB"、"2.0MB"）
+    pub fn format_size(size: usize) -> String {
+        let mut s = size as f64;
+        for u in &["B", "KB", "MB", "GB"] {
+            if s < 1024.0 {
+                return if *u == "B" { format!("{}B", s as usize) } else { format!("{:.1}{}", s, u) };
             }
-            self.pack_match_idx = None;
+            s /= 1024.0;
+        }
+        format!("{:.1}TB", s)
+    }
+
+    /// 获取当前搜索匹配的字节范围
+    pub fn current_match_range(&self) -> Option<(usize, usize)> {
+        if !self.search_active { return None; }
+        let idx = self.global_match_idx?;
+        self.search.as_ref()?.ranges.get(idx).copied()
+    }
+
+    /// 清除搜索状态
+    pub fn clear_search(&mut self) {
+        self.search_active = false;
+        self.search = None;
+        self.pack_ranges.clear();
+        self.pack_match_idx = None;
+        self.global_match_idx = None;
+    }
+
+    /// 刷新当前 pack 的匹配范围列表和高亮索引
+    pub fn refresh_pack(&mut self) {
+        if let Some(ref s) = self.search {
+            self.pack_ranges = s.pack_matches(self.current_pack);
+            self.pack_match_idx = self.global_match_idx
+                .and_then(|gi| s.ranges.get(gi).map(|&(st, _)| st))
+                .and_then(|st| self.pack_ranges.iter().position(|(s, e)| *s <= st && st < *e));
         }
     }
 
-    pub fn jump_to_global_match(&mut self, idx: usize) -> bool {
-        let search = match self.search.as_ref() {
-            Some(s) => s,
-            None => return false,
-        };
-        if idx >= search.match_ranges.len() {
-            return false;
-        }
-        let (start, _) = search.match_ranges[idx];
+    /// 跳转到全局搜索的第 idx 个匹配
+    pub fn jump_global(&mut self, idx: usize) -> bool {
+        let s = match self.search.as_ref() { Some(s) => s, None => return false };
+        if idx >= s.ranges.len() { return false; }
+        let (start, _) = s.ranges[idx];
         self.global_match_idx = Some(idx);
         self.current_pack = start / self.pack_size;
-        let offset_in_pack = start % self.pack_size;
-        let row = offset_in_pack / 16;
-        let total = self.total_rows();
-        let max_rows = 25;
-        self.scroll_top = row
-            .saturating_sub(max_rows / 2)
-            .min(total.saturating_sub(max_rows));
-        self.refresh_pack_display();
+        let row = (start % self.pack_size) / 16;
+        self.scroll_top = row.saturating_sub(12);
+        self.refresh_pack();
         true
     }
 
-    pub fn jump_to_next_global_match(&mut self, mmap: &[u8]) -> bool {
-        let new_idx = self.global_match_idx.map_or(0, |i| i + 1);
-        let len = self.search.as_ref().map_or(0, |s| s.match_ranges.len());
-        if new_idx < len {
-            return self.jump_to_global_match(new_idx);
+    /// 跳转到下一个全局匹配，必要时触发增量搜索
+    pub fn next_global(&mut self, mmap: &[u8]) -> bool {
+        let ni = self.global_match_idx.map_or(0, |i| i + 1);
+        let len = self.search.as_ref().map_or(0, |s| s.ranges.len());
+        if ni < len { return self.jump_global(ni); }
+        let last = self.search.as_ref().and_then(|s| s.ranges.last().map(|(_, e)| *e));
+        if let Some(e) = last {
+            let s = self.search.as_mut().unwrap();
+            if s.extend(mmap, e + 1) && ni < s.ranges.len() {
+                return self.jump_global(ni);
+            }
         }
-        let last_end = self
-            .search
-            .as_ref()
-            .and_then(|s| s.match_ranges.last().map(|(_, e)| *e));
-        if let Some(e) = last_end {
-            let search = self.search.as_mut().unwrap();
-            if search.extend_scan(mmap, e + 1) {
-                if new_idx < search.match_ranges.len() {
-                    return self.jump_to_global_match(new_idx);
+        false
+    }
+
+    /// 跳转到上一个全局匹配
+    pub fn prev_global(&mut self) -> bool {
+        let cur = match self.global_match_idx { Some(i) => i, None => return false };
+        if cur == 0 { return false; }
+        self.jump_global(cur - 1)
+    }
+
+    /// 跳转到下一个 pack 的第一个匹配
+    pub fn next_page_match(&mut self) -> bool {
+        let cur_pack = self.current_pack;
+        if let Some(s) = self.search.as_ref() {
+            for idx in 0..s.ranges.len() {
+                let (start, _) = s.ranges[idx];
+                if start / self.pack_size > cur_pack {
+                    return self.jump_global(idx);
                 }
             }
         }
         false
     }
 
-    pub fn jump_to_prev_global_match(&mut self) -> bool {
-        let cur = match self.global_match_idx {
-            Some(i) => i,
-            None => return false,
-        };
-        if cur == 0 {
-            return false;
+    /// 跳转到上一个 pack 的最后一个匹配
+    pub fn prev_page_match(&mut self) -> bool {
+        let cur_pack = self.current_pack;
+        if let Some(s) = self.search.as_ref() {
+            for idx in (0..s.ranges.len()).rev() {
+                let (start, _) = s.ranges[idx];
+                if start / self.pack_size < cur_pack {
+                    return self.jump_global(idx);
+                }
+            }
         }
-        self.jump_to_global_match(cur - 1)
+        false
     }
 
-    pub fn ensure_cursor_visible(&mut self, terminal_height: u16) {
-        let pack_of_cursor = self.cursor_byte / self.pack_size;
-        if pack_of_cursor != self.current_pack {
-            self.current_pack = pack_of_cursor;
-        }
-        let offset_in_pack = self.cursor_byte % self.pack_size;
-        let row_of_cursor = offset_in_pack / 16;
-        let max_rows = self.max_data_rows(terminal_height);
-        if row_of_cursor < self.scroll_top {
-            self.scroll_top = row_of_cursor;
-        } else if row_of_cursor >= self.scroll_top + max_rows {
-            self.scroll_top = row_of_cursor - max_rows + 1;
-        }
-        let total = self.total_rows();
-        self.scroll_top = self
-            .scroll_top
-            .min(total.saturating_sub(max_rows));
+    /// 确保光标在可见区域内，必要时切换 pack 或调整 scroll_top
+    pub fn ensure_cursor_visible(&mut self, h: u16) {
+        let pk = self.cursor_byte / self.pack_size;
+        if pk != self.current_pack { self.current_pack = pk; }
+        let row = (self.cursor_byte % self.pack_size) / 16;
+        let mr = self.max_rows(h);
+        if row < self.scroll_top { self.scroll_top = row; }
+        else if row >= self.scroll_top + mr { self.scroll_top = row - mr + 1; }
+        let tr = self.total_rows();
+        self.scroll_top = self.scroll_top.min(tr.saturating_sub(mr));
     }
 
-    pub fn modify_byte(&mut self, mmap: &mut [u8], offset: usize, value: u8) {
-        if offset < self.file_size && mmap[offset] != value {
-            self.undo_stack.push(UndoEntry {
-                offset,
-                old: mmap[offset],
-                new: value,
-            });
+    /// 修改单字节并记录到撤销栈
+    pub fn modify(&mut self, mmap: &mut [u8], off: usize, val: u8) {
+        if off < self.file_size && mmap[off] != val {
+            self.undo_stack.push(UndoEntry { offset: off, old: mmap[off], new: val });
             self.redo_stack.clear();
-            mmap[offset] = value;
+            mmap[off] = val;
             self.dirty = true;
         }
     }
 
+    /// 撤销上一次修改
     pub fn undo(&mut self, mmap: &mut [u8]) {
-        if let Some(entry) = self.undo_stack.pop() {
-            if entry.offset < self.file_size {
-                mmap[entry.offset] = entry.old;
-                self.redo_stack.push(entry);
+        if let Some(e) = self.undo_stack.pop() {
+            if e.offset < self.file_size {
+                mmap[e.offset] = e.old;
+                self.redo_stack.push(e);
                 self.dirty = !self.undo_stack.is_empty();
             }
         }
     }
 
+    /// 重做上一次撤销
     pub fn redo(&mut self, mmap: &mut [u8]) {
-        if let Some(entry) = self.redo_stack.pop() {
-            if entry.offset < self.file_size {
-                mmap[entry.offset] = entry.new;
-                self.undo_stack.push(entry);
+        if let Some(e) = self.redo_stack.pop() {
+            if e.offset < self.file_size {
+                mmap[e.offset] = e.new;
+                self.undo_stack.push(e);
                 self.dirty = true;
             }
         }
     }
 
-    pub fn edit_hex_input(&mut self, mmap: &mut [u8], ch: char) {
+    /// HEX 模式下编辑半字节（nibble）
+    ///
+    /// 输入一个 hex 字符，替换当前 nibble，然后自动前进到下一个 nibble/字节。
+    pub fn edit_hex(&mut self, mmap: &mut [u8], ch: char) {
         let nib = match ch {
-            '0'..='9' => (ch as u8 - b'0') as u8,
-            'a'..='f' => (ch as u8 - b'a' + 10) as u8,
-            'A'..='F' => (ch as u8 - b'A' + 10) as u8,
+            '0'..='9' => ch as u8 - b'0',
+            'a'..='f' => ch as u8 - b'a' + 10,
+            'A'..='F' => ch as u8 - b'A' + 10,
             _ => return,
         };
-        if self.cursor_byte >= self.file_size {
-            return;
-        }
+        if self.cursor_byte >= self.file_size { return; }
         let cur = mmap[self.cursor_byte];
-        let new_byte = if self.cursor_nibble == 0 {
-            (cur & 0x0f) | (nib << 4)
-        } else {
-            (cur & 0xf0) | nib
-        };
-        self.modify_byte(mmap, self.cursor_byte, new_byte);
-        if self.cursor_nibble == 0 {
-            self.cursor_nibble = 1;
-        } else {
+        let new = if self.cursor_nibble == 0 { (cur & 0x0f) | (nib << 4) } else { (cur & 0xf0) | nib };
+        self.modify(mmap, self.cursor_byte, new);
+        if self.cursor_nibble == 0 { self.cursor_nibble = 1; }
+        else {
             self.cursor_nibble = 0;
             self.cursor_byte += 1;
             if self.cursor_byte >= self.file_size {
@@ -286,91 +305,77 @@ impl App {
         }
     }
 
-    pub fn edit_ascii_input(&mut self, mmap: &mut [u8], ch: char) {
-        if self.cursor_byte >= self.file_size {
-            return;
+    /// ASCII/UTF8 模式下编辑字符
+    ///
+    /// 将字符编码为 UTF-8 字节序列，逐字节写入并推进光标。
+    pub fn edit_char(&mut self, mmap: &mut [u8], ch: char) {
+        let mut buf = [0u8; 4];
+        let s = ch.encode_utf8(&mut buf);
+        for &b in s.as_bytes() {
+            if self.cursor_byte >= self.file_size { return; }
+            self.modify(mmap, self.cursor_byte, b);
+            self.cursor_byte += 1;
         }
-        let b = (ch as u32 & 0xff) as u8;
-        self.modify_byte(mmap, self.cursor_byte, b);
-        self.cursor_byte += 1;
-        if self.cursor_byte >= self.file_size {
-            self.cursor_byte = self.file_size - 1;
-        }
+        if self.cursor_byte >= self.file_size { self.cursor_byte = self.file_size - 1; }
     }
 
-    pub fn format_size(size: usize) -> String {
-        let units = ["B", "KB", "MB", "GB"];
-        let mut s = size as f64;
-        for unit in &units {
-            if s < 1024.0 {
-                return if *unit == "B" {
-                    format!("{}{}", s as usize, unit)
-                } else {
-                    format!("{:.1}{}", s, unit)
-                };
-            }
-            s /= 1024.0;
-        }
-        format!("{:.1}TB", s)
-    }
-
-    pub fn current_match_range(&self) -> Option<(usize, usize)> {
-        if !self.search_active {
-            return None;
-        }
-        let idx = self.global_match_idx?;
-        let search = self.search.as_ref()?;
-        search.match_ranges.get(idx).copied()
-    }
-
-    pub fn clear_search(&mut self) {
-        self.search_active = false;
-        self.search = None;
-        self.pack_ranges.clear();
-        self.pack_set.clear();
-        self.pack_match_idx = None;
-        self.global_match_idx = None;
-    }
-
-    pub fn do_search(
-        &mut self,
-        mmap: &[u8],
-        is_regex: bool,
-        needle_bytes: Vec<u8>,
-        regex: Option<regex::bytes::Regex>,
-        label: String,
-        terminal_height: u16,
-    ) -> bool {
-        let mut acc = if is_regex {
-            SearchAccumulator::new_regex(regex.unwrap(), self.pack_size, self.file_size, label)
-        } else {
-            SearchAccumulator::new_hex(needle_bytes, self.pack_size, self.file_size, label)
-        };
-        let start_offset = self.current_pack * self.pack_size + self.scroll_top * 16;
-        acc.extend_scan(mmap, start_offset);
-        if !acc.match_ranges.is_empty() {
-            self.search_active = true;
+    /// Accept a pre-built Search, run it, position to first match
+    pub fn apply_search(&mut self, mut acc: Search, mmap: &[u8], h: u16) -> bool {
+        let off = self.current_pack * self.pack_size + self.scroll_top * 16;
+        acc.extend(mmap, off);
+        self.search_active = true;
+        self.search = Some(acc);
+        if !self.search.as_ref().unwrap().ranges.is_empty() {
             self.global_match_idx = Some(0);
-            let (start, _) = acc.match_ranges[0];
+            let (start, _) = self.search.as_ref().unwrap().ranges[0];
             self.current_pack = start / self.pack_size;
-            let offset_in_pack = start % self.pack_size;
-            let row = offset_in_pack / 16;
-            let max_rows = self.max_data_rows(terminal_height);
-            let total = self.total_rows();
-            self.scroll_top = row
-                .saturating_sub(max_rows / 2)
-                .min(total.saturating_sub(max_rows));
-            self.search = Some(acc);
-            self.refresh_pack_display();
-            true
-        } else {
-            false
+            let row = (start % self.pack_size) / 16;
+            let mr = self.max_rows(h);
+            let tr = self.total_rows();
+            self.scroll_top = row.saturating_sub(mr / 2).min(tr.saturating_sub(mr));
         }
+        self.refresh_pack();
+        true
     }
 
-    pub fn pack_and_row_for_offset(offset: usize, pack_size: usize) -> (usize, usize) {
-        let pack = offset / pack_size;
-        let row = (offset % pack_size) / 16;
-        (pack, row)
+    /// 启动后台增量搜索线程
+    pub fn start_bg_search(&mut self, needle: Vec<u8>, data: Vec<u8>) {
+        let file_size = self.file_size;
+        let rx = crate::search::start_bg_search(needle, file_size, data);
+        self.search_rx = Some(rx);
+    }
+
+    /// 消费后台搜索结果，将新匹配追加到 ranges 并更新位图
+    pub fn drain_search_rx(&mut self) {
+        let events: Vec<SearchEvent> = {
+            let rx = match self.search_rx { Some(ref rx) => rx, None => return };
+            let mut events = Vec::new();
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(_) => break,
+                }
+            }
+            events
+        };
+        for event in events {
+            match event {
+                SearchEvent::Chunk { matches } => {
+                    if let Some(ref mut s) = self.search {
+                        for &(start, end) in &matches {
+                            if s.ranges.last().map_or(true, |(_, e)| *e <= start) {
+                                s.ranges.push((start, end));
+                                s.match_count += 1;
+                                s.mark_all(start, end);
+                            }
+                        }
+                    }
+                }
+                SearchEvent::Done => {
+                    self.search_rx = None;
+                }
+            }
+        }
+        self.refresh_pack();
     }
 }

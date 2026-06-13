@@ -1,3 +1,8 @@
+/// 颜色配置模块
+///
+/// 从 YAML 文件（或内嵌默认值）加载字节类型样式。
+/// 支持 `fg: auto`：根据背景色亮度自动选择黑色或白色前景。
+/// 提供终端调色板读取，用于将命名色（Red/Blue/...）转换为实际 RGB。
 use ratatui::style::{Color, Style};
 use std::collections::HashMap;
 use std::fs;
@@ -5,9 +10,15 @@ use std::sync::OnceLock;
 
 type Rgb = [u8; 3];
 
-/// fg: auto 解析后的哨兵值，标记需要在渲染时实时计算
+/// fg: auto 的哨兵值
+///
+/// 解析 YAML 时，`fg: auto` + 有 bg → 存储此哨兵。
+/// 渲染时由 `resolve_auto_fg()` 根据实际 bg 亮度替换为 Black 或 White。
 pub const AUTO_FG_SENTINEL: Color = Color::Rgb(1, 1, 1);
 
+/// 计算颜色的感知亮度（ITU-R BT.601 公式）
+///
+/// 返回 0.0-255.0 的灰度值。大于 128.0 视为亮色，前景用黑色；否则用白色。
 pub fn luminance(c: Color) -> f64 {
     let (r, g, b) = color_rgb(c);
     0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64
@@ -16,6 +27,10 @@ pub fn luminance(c: Color) -> f64 {
 // ─── terminal palette ────────────────────────────────────────
 static TERM_PALETTE: OnceLock<HashMap<usize, [u8; 3]>> = OnceLock::new();
 
+/// 从 ~/.termux/colors.properties 读取终端调色板
+///
+/// 解析 color0-color15 的 RGB 值，存入全局 TERM_PALETTE。
+/// color_rgb() 会优先使用此调色板，使命名色与终端主题一致。
 pub fn init_terminal_palette(home_dir: &std::path::Path) {
     let mut map = HashMap::new();
     let path = home_dir.join(".termux/colors.properties");
@@ -37,6 +52,7 @@ pub fn init_terminal_palette(home_dir: &std::path::Path) {
     TERM_PALETTE.set(map).ok();
 }
 
+/// 解析 6 位十六进制颜色字符串（如 "ff00ab"）为 RGB 数组
 fn parse_hex3(s: &str) -> Option<[u8; 3]> {
     if s.len() >= 6 {
         Some([
@@ -47,7 +63,10 @@ fn parse_hex3(s: &str) -> Option<[u8; 3]> {
     } else { None }
 }
 
-/// Resolve a named Color to actual (r,g,b), using terminal palette if available
+/// 将 ratatui Color 解析为实际 RGB 值
+///
+/// 优先返回 Rgb 变体的直接值。
+/// 对命名色（Black/Red/...），优先查终端调色板，无则用 XTerm 默认值。
 pub fn color_rgb(c: Color) -> (u8, u8, u8) {
     if let Color::Rgb(r, g, b) = c { return (r, g, b); }
     let idx = match c {
@@ -101,7 +120,8 @@ dim:
   global: 0.8
 "#;
 
-// ─── minimal YAML parser ─────────────────────────────────────
+// ─── 极简 YAML 解析器 ──────────────────────────────────────
+/// 从 YAML 文本块中查找指定 key 的样式定义（如 `{ fg: auto, bg: red }`）
 fn yaml_parse_style(block: &str, key: &str) -> Option<Style> {
     let mut start = 0;
     loop {
@@ -120,6 +140,9 @@ fn yaml_parse_style(block: &str, key: &str) -> Option<Style> {
     }
 }
 
+/// 解析花括号内的样式值，如 `fg: auto, bg: red`
+///
+/// 处理 `fg: auto`：有 bg 时存哨兵 AUTO_FG_SENTINEL，无 bg 时 fg 保持 null。
 fn parse_style_val(val: &str) -> Option<Style> {
     let val = val.trim();
     if val == "{}" { return Some(Style::default()); }
@@ -180,6 +203,7 @@ fn split_top_level<'a>(s: &'a str, sep: char) -> Vec<&'a str> {
     parts
 }
 
+/// 解析颜色字符串：命名色（black/red/...）、auto、或 [r,g,b] 格式
 fn parse_color(v: &str) -> Option<Color> {
     match v {
         "black" => Some(Color::Black),
@@ -196,6 +220,7 @@ fn parse_color(v: &str) -> Option<Color> {
     }
 }
 
+/// 解析 `[r, g, b]` 格式的 RGB 颜色
 fn parse_rgb(v: &str) -> Option<Color> {
     let inner = v.strip_prefix('[')?.strip_suffix(']')?;
     let mut nums = [0u8; 3];
@@ -206,6 +231,10 @@ fn parse_rgb(v: &str) -> Option<Color> {
     Some(Color::Rgb(nums[0], nums[1], nums[2]))
 }
 
+/// 解析 YAML 中的 dim 配置块
+///
+/// 返回 (全局 dim 系数, 特定 RGB 颜色的 dim 系数覆盖表)。
+/// dim 系数用于压暗背景色（如 0.8 = 原亮度的 80%）。
 fn yaml_parse_dim(yaml: &str) -> (f64, HashMap<Rgb, f64>) {
     let dim_start = yaml.find("\ndim:").unwrap_or(yaml.len());
     let dim_block = &yaml[dim_start..];
@@ -235,7 +264,10 @@ fn yaml_parse_dim(yaml: &str) -> (f64, HashMap<Rgb, f64>) {
     (global, overrides)
 }
 
-// ─── ColorConfig ─────────────────────────────────────────────
+// ─── 颜色配置 ──────────────────────────────────────────────
+/// 全局颜色配置，包含每种字节类型的样式和 dim 参数
+///
+/// 从 color.yaml（或内嵌默认值）解析，通过 `sp()` 函数按编号访问。
 #[derive(Debug)]
 pub struct ColorConfig {
     pub sp_null: Style,
@@ -257,6 +289,7 @@ pub struct ColorConfig {
 }
 
 impl ColorConfig {
+    /// 从文件加载颜色配置，文件不存在则使用内嵌默认值
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
         let yaml = if path.exists() {
             fs::read_to_string(path).map_err(|e| format!("read color.yaml: {e}"))?
@@ -266,6 +299,7 @@ impl ColorConfig {
         Self::parse(&yaml)
     }
 
+    /// 解析 YAML 文本，构建 ColorConfig
     fn parse(yaml: &str) -> Result<Self, String> {
         let d = Style::default().fg(Color::Rgb(220, 220, 220));
 
@@ -291,6 +325,10 @@ impl ColorConfig {
         })
     }
 
+    /// 按比例压暗样式背景色
+    ///
+    /// 使用 dim_global 系数，特定 RGB 颜色可用 overrides 覆盖。
+    /// 用于交替 dim 效果，增强相邻相同类型字节的可区分性。
     pub fn dim_bg(&self, s: Style) -> Style {
         if let Some(bg) = s.bg {
             let mult = match bg {
@@ -305,6 +343,7 @@ impl ColorConfig {
     }
 }
 
+/// 按比例缩放颜色（num/den 为缩放因子，如 80/100 = 80%）
 fn scale_color(c: Color, num: u16, den: u16) -> Color {
     let (r, g, b) = color_rgb(c);
     Color::Rgb(

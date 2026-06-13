@@ -1,0 +1,151 @@
+# read-bin 代码编辑导航
+
+## 项目概览
+
+终端 TUI 十六进制查看/编辑器，Rust 实现。
+
+**依赖**：ratatui（TUI 框架）、crossterm（终端控制）、memmap2（内存映射文件）
+
+**构建**：`cargo build --release`，产物在 `target/release/read-bin`
+
+## 文件结构
+
+```
+src/
+├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（最大，~1300 行）
+├── app.rs           # 应用状态管理（分页、光标、搜索、undo/redo）
+├── color_config.rs  # YAML 颜色配置加载 + fg: auto 逻辑
+├── search.rs        # 搜索引擎（精确 hex + nibble 模式 + 三级位图索引）
+└── utf8.rs          # UTF-8 字节分类与解码
+```
+
+## 模块依赖关系
+
+```
+main.rs
+ ├── app.rs        （App 状态）
+ ├── color_config.rs （ColorConfig 颜色配置）
+ ├── search.rs     （Search 搜索状态）
+ └── utf8.rs       （ByteClass 字节分类）
+```
+
+## 关键数据流
+
+```
+用户输入 → handle_*() → App 状态更新 → resolve() → style_for() → 渲染
+```
+
+## main.rs 导航
+
+### 初始化（30-125）
+- `main()`：解析参数，打开文件，加载颜色配置，初始化终端
+
+### 事件循环（127-371）
+- `run()`：主循环 = 渲染 + 事件处理
+- 鼠标事件：点击定位光标、滚轮翻页
+- 键盘事件：Ctrl 快捷键 → 模式分发
+
+### 输入处理（375-754）
+- `handle_save()`：保存确认弹窗
+- `handle_input()`：文本输入（搜索/跳转）
+- `handle_edit()`：编辑模式（光标移动 + 字节编辑）
+- `handle_normal()`：Normal 模式快捷键（最大最复杂）
+
+### 渲染（770-1342）
+- `style_for(n)`：编号 → 样式映射
+- `resolve()`：样式优先级链（cursor > found > search > selection > edit-dim > base）
+- `resolve_auto_fg()`：fg: auto 哨兵 → 实际 black/white
+- `build_lines()`：构建渲染行（含 UTF-8 跨行处理）
+- `draw_hex()` / `draw_status()` / `draw_help()` / `draw_save_dialog()`
+
+## app.rs 导航
+
+### 枚举
+- `DisplayMode`：Ascii / Hex / Utf8
+- `InputMode`：Normal / Edit / SearchInput / GotoInput / StringSearchInput / SaveConfirm / Help
+
+### App 核心字段
+- 分页：`file_size`, `pack_size`(4096), `total_packs`, `current_pack`, `scroll_top`
+- 光标：`cursor_byte`, `cursor_nibble`（hex 模式的半字节）
+- 搜索：`search`, `search_active`, `pack_ranges`, `global_match_idx`
+- 编辑：`undo_stack`, `redo_stack`, `dirty`
+- 选区：`sel_start`, `sel_end`
+
+### 关键方法
+- `jump_global()` / `next_global()` / `prev_global()`：搜索导航
+- `modify()` / `undo()` / `redo()`：字节编辑 + 撤销
+- `edit_hex()` / `edit_char()`：hex/字符编辑
+- `ensure_cursor_visible()`：滚动跟随光标
+
+## color_config.rs 导航
+
+### 核心机制
+- `AUTO_FG_SENTINEL`：`Rgb(1,1,1)` 哨兵，标记 `fg: auto`
+- `luminance()`：BT.601 亮度公式（>128 亮 → 黑前景，否则白前景）
+- `color_rgb()`：命名色 → RGB（优先终端调色板）
+
+### 解析流程
+```
+YAML 文本 → yaml_parse_style() → parse_style_val()
+  ↓ fg: auto + 有 bg → 存哨兵
+  ↓ fg: auto + 无 bg → fg null（终端默认）
+```
+
+### 样式编号映射
+```
+1=null, 2=head2, 3=tail, 4=control, 5=ascii, 6=head3
+8=head4, 10=hex, 12/13=found, 15/17=selection, 16=cursor
+```
+
+## search.rs 导航
+
+### 搜索模式
+- `Needle::Lit`：精确字节序列
+- `Needle::Pat`：nibble 模式（`NibAtom::Exact/Range/Any`）
+
+### 三级位图索引
+```
+L0: 每 pack 1 bit   → 快速跳过空 pack
+L1: 每 1MB 1 bit    → 快速跳过空 MB
+L2: 每 1GB 1 bit    → 快速跳过空 GB
+```
+
+### 搜索语法
+```
+4f2a        → 精确 hex
+4x          → 高 nibble=4，低 nibble 任意
+[0-3]f      → 高 nibble 在 0-3，低 nibble=f
+z           → 任意字节（= 两个 Any nibble）
+```
+
+## utf8.rs 导航
+
+- `ByteClass`：字节类型（Ascii/Tail/Duo/Trio/Quo/Invalid）
+- `decode_row()`：行级 UTF-8 解码，处理跨行序列
+- `display_width()`：CJK 等宽字符 width=2
+
+## 编辑规范
+
+### 重命名函数
+```bash
+# 正确：用 \b word boundary
+sed -i 's/\bsp(/style_for(/g' src/main.rs
+
+# 错误：replaceAll 会误匹配 byte_disp → byte_distyle_for
+```
+
+### 添加新样式
+1. `color_config.rs`：在 `ColorConfig` 加字段，`parse()` 中解析
+2. `main.rs`：在 `style_for()` 加编号映射
+3. `color.yaml`：加对应条目
+
+### 添加新字节类型
+1. `byte_type_group()`：加分类逻辑
+2. `byte_style()`：加样式映射
+3. `byte_disp()`：加显示文本
+
+### 编译验证
+```bash
+cargo build --release    # 编译
+cargo clippy             # lint
+```
