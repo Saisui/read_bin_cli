@@ -166,6 +166,416 @@ fn main() -> io::Result<()> {
     exit_code
 }
 
+/// 渲染一帧画面
+///
+/// 根据当前 input_mode 调度不同的渲染组合。
+fn render_frame(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &App,
+    data: &[u8],
+) -> io::Result<()> {
+    terminal.draw(|f| {
+        let area = f.area();
+        match app.input_mode {
+            InputMode::Help => {
+                draw_hex(f, app, data, area);
+                draw_help(f, app, area);
+            }
+            InputMode::SaveConfirm => {
+                draw_hex(f, app, data, area);
+                draw_save_dialog(f, app, area);
+            }
+            InputMode::ModeSelect => {
+                draw_hex(f, app, data, area);
+                draw_status(f, app, data, area);
+                draw_mode_dropdown(f, app, area);
+            }
+            _ => {
+                draw_hex(f, app, data, area);
+                draw_status(f, app, data, area);
+            }
+        }
+    })?;
+    Ok(())
+}
+
+/// 处理鼠标事件
+///
+/// 包括：点击定位光标/选区、拖拽选区、滚轮翻页、帮助弹窗滚动条拖拽、
+/// 状态栏点击（模式菜单/跳转/帮助）、顶栏点击（打开文件浏览器）。
+fn handle_mouse_event(
+    app: &mut App,
+    mouse: crossterm::event::MouseEvent,
+    size: ratatui::layout::Size,
+    max_rows: usize,
+    reopen_browser: &mut bool,
+    should_break: &mut bool,
+) {
+    let mx = mouse.column;
+    let my = mouse.row;
+    let area_h = size.height;
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if app.input_mode == InputMode::Help {
+                // 点击帮助弹窗外 → 关闭
+                let (hx, hy, hw, hh) = app.help_rect.unwrap_or((0, 0, 0, 0));
+                if mx < hx || mx >= hx + hw || my < hy || my >= hy + hh {
+                    app.input_mode = InputMode::Normal;
+                    app.help_rect = None;
+                    app.help_dragging = false;
+                } else {
+                    // 点击滚动条 → 开始拖拽
+                    let sb_x = hx + hw - 2;
+                    if mx == sb_x && hh > 2 {
+                        app.help_dragging = true;
+                        let inner_h = hh as usize - 2;
+                        let total = HELP_LINES.lines().count() + 2;
+                        let max_scroll = total.saturating_sub(inner_h);
+                        if max_scroll > 0 && inner_h > 0 {
+                            let click_ratio = (my - hy - 1) as f64 / (inner_h - 1) as f64;
+                            app.help_scroll = (click_ratio * max_scroll as f64).round() as usize;
+                        }
+                    }
+                }
+            } else if app.input_mode == InputMode::ModeSelect {
+                // 模式下拉菜单点击
+                let dh = 5u16;
+                let dy = area_h.saturating_sub(1) - dh;
+                let dw = 10u16;
+                if mx < dw && my >= dy && my < dy + dh {
+                    let sel = my - dy;
+                    match sel {
+                        0 => app.mode = DisplayMode::Ascii,
+                        1 => app.mode = DisplayMode::Hex,
+                        2 => app.mode = DisplayMode::Utf8,
+                        3 => app.is_color256 = !app.is_color256,
+                        _ => {}
+                    }
+                    if sel <= 2 {
+                        app.input_mode = InputMode::Normal;
+                    }
+                } else {
+                    app.input_mode = InputMode::Normal;
+                }
+            } else if my == 0 && app.input_mode == InputMode::Normal {
+                // 点击顶栏 → 打开文件浏览器
+                *reopen_browser = true;
+                *should_break = true;
+            } else if my >= 2 && mx >= 4 && my < area_h.saturating_sub(1) {
+                // 点击数据区 → 定位光标 + 开始选区
+                let global_row = my as usize - 2 + app.global_scroll_top();
+                let col = mx as usize - 4;
+                let bc = col / 2;
+                if bc < 16 {
+                    let off = global_row * 16 + bc;
+                    if off < app.file_size {
+                        app.cursor_byte = off;
+                        app.cursor_focused = true;
+                        app.sel_start = Some(off);
+                        app.sel_end = Some(off);
+                        app.dragging = true;
+                        app.ensure_cursor_visible(area_h);
+                    }
+                }
+            } else if app.input_mode != InputMode::Edit {
+                app.cursor_focused = false;
+                app.sel_start = None;
+                app.sel_end = None;
+            }
+            // 状态栏点击
+            if my == area_h.saturating_sub(1) && app.input_mode == InputMode::Normal {
+                let dirty_len = if app.dirty { 11 } else { 0 };
+                let hex_w = if app.file_size <= 0xff { 2 }
+                    else if app.file_size <= 0xffff { 4 }
+                    else if app.file_size <= 0xffffff { 6 }
+                    else { 8 };
+                let at_offset = (6 + dirty_len + 2) as u16;
+                let at_len = (1 + hex_w) as u16;
+                let pack_offset = at_offset + at_len + 2;
+                let pack_total_hex = format!("{:x}", app.total_packs).len();
+                let pack_len = (5 + hex_w + 1 + pack_total_hex) as u16;
+                let help_offset = pack_offset + pack_len + 2;
+                if mx < 7 {
+                    app.input_mode = InputMode::ModeSelect;
+                } else if mx >= at_offset && mx < at_offset + at_len {
+                    app.input_mode = InputMode::GotoByteInput;
+                    app.input_buf.clear();
+                    app.input_prompt = "Go to byte (hex):".into();
+                } else if mx >= pack_offset && mx < pack_offset + pack_len {
+                    app.input_mode = InputMode::GotoInput;
+                    app.input_buf.clear();
+                    app.input_prompt = "Go to pack (hex):".into();
+                } else if mx >= help_offset {
+                    app.input_mode = InputMode::Help;
+                    app.help_scroll = 0;
+                }
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if app.help_dragging && app.input_mode == InputMode::Help {
+                // 拖拽帮助弹窗滚动条
+                if let Some((hx, hy, hw, hh)) = app.help_rect {
+                    let sb_x = hx + hw - 2;
+                    let inner_h = hh as usize - 2;
+                    let total = 2 + HELP_LINES.lines().count();
+                    let max_scroll = total.saturating_sub(inner_h);
+                    if max_scroll > 0 && inner_h > 0 && mx == sb_x {
+                        let drag_ratio = (my as isize - hy as isize - 1).max(0) as f64
+                            / (inner_h - 1) as f64;
+                        app.help_scroll = (drag_ratio * max_scroll as f64).round() as usize;
+                    }
+                }
+            } else if app.dragging {
+                // 拖拽选区
+                if my >= 2 && mx >= 4 && my < area_h.saturating_sub(1) {
+                    let global_row = my as usize - 2 + app.global_scroll_top();
+                    let col = mx as usize - 4;
+                    let bc = col / 2;
+                    if bc < 16 {
+                        let off = global_row * 16 + bc;
+                        if off < app.file_size {
+                            app.cursor_byte = off;
+                            app.sel_end = Some(off);
+app.ensure_cursor_visible(area_h);
+                        }
+                    }
+                }
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            app.help_dragging = false;
+            if app.dragging {
+                app.dragging = false;
+                if app.sel_start == app.sel_end {
+                    app.sel_start = None;
+                    app.sel_end = None;
+                }
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            if app.input_mode == InputMode::Help {
+                app.help_scroll = app.help_scroll.saturating_sub(1);
+            } else {
+                let gs = app.global_scroll_top();
+                if gs >= 3 {
+                    app.set_global_scroll(gs - 3);
+                } else {
+                    app.set_global_scroll(0);
+                }
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if app.input_mode == InputMode::Help {
+                app.help_scroll += 1;
+            } else {
+                let gs = app.global_scroll_top();
+                let max = app.global_total_rows().saturating_sub(max_rows);
+                app.set_global_scroll((gs + 3).min(max));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 处理键盘事件
+///
+/// 包括：Release 过滤、Windows 40ms 节流、Ctrl/Alt 全局快捷键、
+/// 模式分发（Help/ModeSelect/SaveConfirm/Search/Edit/Normal）。
+fn handle_key_event(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    data: &mut [u8],
+    filename: &str,
+    th: u16,
+    max_rows: usize,
+    reopen_browser: &mut bool,
+    should_break: &mut bool,
+) {
+    if key.kind == event::KeyEventKind::Release {
+        return;
+    }
+
+    // Ctrl shortcuts (global)
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('z') => {
+                app.undo(data);
+                return;
+            }
+            KeyCode::Char('y') => {
+                app.redo(data);
+                return;
+            }
+            KeyCode::Char('q') => {
+                if app.dirty {
+                    app.input_mode = InputMode::SaveConfirm;
+                    app.save_selected = true;
+                } else {
+                    *should_break = true;
+                }
+                return;
+            }
+            KeyCode::Char('g') => {
+                app.input_mode = InputMode::GotoInput;
+                app.input_buf.clear();
+                app.input_prompt = "Go to (hex):".into();
+                return;
+            }
+            KeyCode::Char('h') => {
+                app.input_mode = InputMode::Help;
+                app.help_scroll = 0;
+                return;
+            }
+            KeyCode::Char('s') => {
+                let _ = std::fs::write(filename, &*data);
+                app.dirty = false;
+                return;
+            }
+            KeyCode::Char('c') => {
+                if let (Some(start), Some(end)) = (app.sel_start, app.sel_end) {
+                    let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+                    let len = (hi - lo + 1).min(data.len() - lo);
+                    let selected = &data[lo..lo + len];
+                    let text = match app.mode {
+                        DisplayMode::Ascii => {
+                            selected.iter().map(|b| {
+                                if *b == 0 { '.' }
+                                else if *b == 0x0d { 'r' }
+                                else if *b == 10 { '\n' }
+                                else if *b == 0x1b { 'e' }
+                                else if (0x01..=0x1f).contains(b) { '.' }
+                                else if *b == 0x20 { ' ' }
+                                else if (0x21..=0x7e).contains(b) { *b as char }
+                                else { '.' }
+                            }).collect()
+                        }
+                        DisplayMode::Hex => {
+                            selected.iter().map(|b| format!("{:02x}", b))
+                                .collect::<Vec<_>>().join(" ")
+                        }
+                        DisplayMode::Utf8 => {
+                            let segs = crate::utf8::decode_row(data, lo, len, 0);
+                            segs.iter().filter_map(|seg| {
+                                if let crate::utf8::Segment::Char { ch, .. } = seg {
+                                    Some(*ch)
+                                } else {
+                                    None
+                                }
+                            }).collect()
+                        }
+                    };
+                    let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
+                }
+                return;
+            }
+            KeyCode::Char('f') => {
+                app.input_mode = InputMode::SearchInput;
+                app.input_prompt = "search hex:".into();
+                app.input_buf.clear();
+                return;
+            }
+            KeyCode::Char('p') => {
+                *reopen_browser = true;
+                *should_break = true;
+                return;
+            }
+            KeyCode::Left => {
+                if app.input_mode == InputMode::Edit && app.current_pack > 0 {
+                    app.current_pack -= 1;
+                    app.scroll_top = 0;
+                    app.cursor_byte = app.current_pack * app.pack_size;
+                    app.ensure_cursor_visible(th);
+                }
+                return;
+            }
+            KeyCode::Right => {
+                if app.input_mode == InputMode::Edit && app.current_pack + 1 < app.total_packs {
+                    app.current_pack += 1;
+                    app.scroll_top = 0;
+                    app.cursor_byte = app.current_pack * app.pack_size;
+                    app.ensure_cursor_visible(th);
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        match key.code {
+            KeyCode::Char('j') => {
+                app.sel_start = Some(app.cursor_byte);
+                return;
+            }
+            KeyCode::Char('k') => {
+                app.sel_end = Some(app.cursor_byte);
+                return;
+            }
+            KeyCode::Char('m') => {
+                app.mode = app.mode.next();
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    app.cursor_focused = true;
+
+    match app.input_mode {
+        InputMode::Help => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.help_scroll = app.help_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.help_scroll += 1;
+            }
+            KeyCode::PageUp => {
+                app.help_scroll = app.help_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                app.help_scroll += 10;
+            }
+            _ => {}
+        }
+        InputMode::ModeSelect => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.mode = app.mode.prev();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.mode = app.mode.next();
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('1') => { app.mode = DisplayMode::Ascii; app.input_mode = InputMode::Normal; }
+            KeyCode::Char('2') => { app.mode = DisplayMode::Hex; app.input_mode = InputMode::Normal; }
+            KeyCode::Char('3') => { app.mode = DisplayMode::Utf8; app.input_mode = InputMode::Normal; }
+            KeyCode::Char('4') | KeyCode::Char('n') => { app.is_color256 = !app.is_color256; }
+            _ => {}
+        }
+        InputMode::FileBrowser => {
+            app.input_mode = InputMode::Normal;
+        }
+        InputMode::SaveConfirm => handle_save(app, key.code, data, filename, should_break),
+        InputMode::SearchInput
+        | InputMode::StringSearchInput
+        | InputMode::GotoInput
+        | InputMode::GotoByteInput => {
+            handle_input(app, key.code, data, th);
+        }
+        InputMode::Edit => handle_edit(app, key.code, data, th),
+        InputMode::Normal => {
+            handle_normal(app, key.code, data, th, max_rows, should_break)
+        }
+    }
+}
+
 /// 主事件循环：渲染 → 处理输入 → 重复
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -177,6 +587,7 @@ fn run(
     let mut last_key_time = std::time::Instant::now();
     let mut reopen_browser = false;
     let mut should_break = false;
+
     loop {
         if should_break { break; }
         let area = terminal.size()?;
@@ -212,396 +623,26 @@ fn run(
         }
 
         // render
-        terminal.draw(|f| {
-            let area = f.area();
-            match app.input_mode {
-                InputMode::Help => {
-                    draw_hex(f, app, data, area);
-                    draw_help(f, app, area);
-                }
-                InputMode::SaveConfirm => {
-                    draw_hex(f, app, data, area);
-                    draw_save_dialog(f, app, area);
-                }
-                InputMode::ModeSelect => {
-                    draw_hex(f, app, data, area);
-                    draw_status(f, app, data, area);
-                    draw_mode_dropdown(f, app, area);
-                }
-                _ => {
-                    draw_hex(f, app, data, area);
-                    draw_status(f, app, data, area);
-                }
-            }
-        })?;
+        render_frame(terminal, app, data)?;
 
         // handle input
         let evt = event::read()?;
         match evt {
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    let mx = mouse.column;
-                    let my = mouse.row;
-                    if app.input_mode == InputMode::Help {
-                        // click outside help popup -> close
-                        let (hx, hy, hw, hh) = app.help_rect.unwrap_or((0, 0, 0, 0));
-                        if mx < hx || mx >= hx + hw || my < hy || my >= hy + hh {
-                            app.input_mode = InputMode::Normal;
-                            app.help_rect = None;
-                            app.help_dragging = false;
-                        } else {
-                            // click on scrollbar -> start drag
-                            let sb_x = hx + hw - 2;
-                            if mx == sb_x && hh > 2 {
-                                app.help_dragging = true;
-                                // jump to clicked position
-                                let inner_h = hh as usize - 2;
-                                let total = HELP_LINES.len();
-                                let max_scroll = total.saturating_sub(inner_h);
-                                if max_scroll > 0 && inner_h > 0 {
-                                    let click_ratio = (my - hy - 1) as f64 / (inner_h - 1) as f64;
-                                    app.help_scroll = (click_ratio * max_scroll as f64).round() as usize;
-                                }
-                            }
-                        }
-                    } else if app.input_mode == InputMode::ModeSelect {
-                        let dh = 5u16;
-                        let dy = area.height.saturating_sub(1) - dh;
-                        let dw = 10u16;
-                        if mx < dw && my >= dy && my < dy + dh {
-                            let sel = my - dy;
-                            match sel {
-                                0 => app.mode = DisplayMode::Ascii,
-                                1 => app.mode = DisplayMode::Hex,
-                                2 => app.mode = DisplayMode::Utf8,
-                                3 => app.is_color256 = !app.is_color256,
-                                _ => {}
-                            }
-                            if sel <= 2 {
-                                app.input_mode = InputMode::Normal;
-                            }
-                        } else {
-                            app.input_mode = InputMode::Normal;
-                        }
-                    } else if my == 0 && app.input_mode == InputMode::Normal {
-                        // 点击顶栏 → 打开文件浏览器
-                        reopen_browser = true;
-                        should_break = true;
-                    } else if my >= 2 && mx >= 4 && my < area.height.saturating_sub(1) {
-                        let global_row = my as usize - 2 + app.global_scroll_top();
-                        let col = mx as usize - 4;
-                        let bc = col / 2;
-                        if bc < 16 {
-                            let off = global_row * 16 + bc;
-                            if off < app.file_size {
-                                app.cursor_byte = off;
-                                app.cursor_focused = true;
-                                app.sel_start = Some(off);
-                                app.sel_end = Some(off);
-                                app.dragging = true;
-                                app.ensure_cursor_visible(th);
-                            }
-                        }
-                    } else if app.input_mode != InputMode::Edit {
-                        app.cursor_focused = false;
-                        app.sel_start = None;
-                        app.sel_end = None;
-                    }
-                    // status bar click
-                    if my == area.height.saturating_sub(1) && app.input_mode == InputMode::Normal {
-                        let dirty_len = if app.dirty { 11 } else { 0 };
-                        let hex_w = if app.file_size <= 0xff { 2 }
-                            else if app.file_size <= 0xffff { 4 }
-                            else if app.file_size <= 0xffffff { 6 }
-                            else { 8 };
-                        let at_offset = (6 + dirty_len + 2) as u16;
-                        let at_len = (1 + hex_w) as u16;
-                        let pack_offset = at_offset + at_len + 2;
-                        let pack_total_hex = format!("{:x}", app.total_packs).len();
-                        let pack_len = (5 + hex_w + 1 + pack_total_hex) as u16;
-                        let help_offset = pack_offset + pack_len + 2;
-                        if mx < 7 {
-                            app.input_mode = InputMode::ModeSelect;
-                        } else if mx >= at_offset && mx < at_offset + at_len {
-                            app.input_mode = InputMode::GotoByteInput;
-                            app.input_buf.clear();
-                            app.input_prompt = "Go to byte (hex):".into();
-                        } else if mx >= pack_offset && mx < pack_offset + pack_len {
-                            app.input_mode = InputMode::GotoInput;
-                            app.input_buf.clear();
-                            app.input_prompt = "Go to pack (hex):".into();
-                        } else if mx >= help_offset {
-                            app.input_mode = InputMode::Help;
-                            app.help_scroll = 0;
-                        }
-                    }
-                }
-                MouseEventKind::Drag(MouseButton::Left) => {
-                    let mx = mouse.column;
-                    let my = mouse.row;
-                    if app.help_dragging && app.input_mode == InputMode::Help {
-                        // drag scrollbar in help window
-                        if let Some((hx, hy, hw, hh)) = app.help_rect {
-                            let sb_x = hx + hw - 2;
-                            let inner_h = hh as usize - 2;
-                            let total = 2 + HELP_LINES.lines().count();
-                            let max_scroll = total.saturating_sub(inner_h);
-                            if max_scroll > 0 && inner_h > 0 && mx == sb_x {
-                                let drag_ratio = (my as isize - hy as isize - 1).max(0) as f64
-                                    / (inner_h - 1) as f64;
-                                app.help_scroll = (drag_ratio * max_scroll as f64).round() as usize;
-                            }
-                        }
-                    } else if app.dragging {
-                        let mx = mouse.column;
-                        let my = mouse.row;
-                        if my >= 2 && mx >= 4 && my < area.height.saturating_sub(1) {
-                            let global_row = my as usize - 2 + app.global_scroll_top();
-                            let col = mx as usize - 4;
-                            let bc = col / 2;
-                            if bc < 16 {
-                                let off = global_row * 16 + bc;
-                                if off < app.file_size {
-                                    app.cursor_byte = off;
-                                    app.sel_end = Some(off);
-                                    app.ensure_cursor_visible(th);
-                                }
-                            }
-                        }
-                    }
-                }
-                MouseEventKind::Up(MouseButton::Left) => {
-                    app.help_dragging = false;
-                    if app.dragging {
-                        app.dragging = false;
-                        if app.sel_start == app.sel_end {
-                            app.sel_start = None;
-                            app.sel_end = None;
-                        }
-                    }
-                }
-                MouseEventKind::ScrollUp => {
-                    if app.input_mode == InputMode::Help {
-                        app.help_scroll = app.help_scroll.saturating_sub(1);
-                    } else {
-                        let gs = app.global_scroll_top();
-                        if gs >= 3 {
-                            app.set_global_scroll(gs - 3);
-                        } else {
-                            app.set_global_scroll(0);
-                        }
-                    }
-                }
-                MouseEventKind::ScrollDown => {
-                    if app.input_mode == InputMode::Help {
-                        app.help_scroll += 1;
-                    } else {
-                        let gs = app.global_scroll_top();
-                        let max = app.global_total_rows().saturating_sub(max_rows);
-                        app.set_global_scroll((gs + 3).min(max));
-                    }
-                }
-                _ => {}
-            },
+            Event::Mouse(mouse) => {
+                handle_mouse_event(app, mouse, area, max_rows, &mut reopen_browser, &mut should_break);
+            }
             Event::Key(key) => {
-                if key.kind == event::KeyEventKind::Release {
-                    continue;
-                }
                 #[cfg(target_os = "windows")]
-                if last_key_time.elapsed().as_millis() < 40 {
+                if key.kind == event::KeyEventKind::Press
+                    && last_key_time.elapsed().as_millis() < 40
+                {
                     continue;
                 }
                 #[cfg(target_os = "windows")]
                 {
                     last_key_time = std::time::Instant::now();
                 }
-                // Ctrl shortcuts (global)
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match key.code {
-                        KeyCode::Char('z') => {
-                            app.undo(data);
-                            continue;
-                        }
-                        KeyCode::Char('y') => {
-                            app.redo(data);
-                            continue;
-                        }
-                        KeyCode::Char('q') => {
-                            if app.dirty {
-                                app.input_mode = InputMode::SaveConfirm;
-                                app.save_selected = true;
-                            } else {
-                                break;
-                            }
-                            continue;
-                        }
-                        KeyCode::Char('g') => {
-                            app.input_mode = InputMode::GotoInput;
-                            app.input_buf.clear();
-                            app.input_prompt = "Go to (hex):".into();
-                            continue;
-                        }
-                        KeyCode::Char('h') => {
-                            app.input_mode = InputMode::Help;
-                            app.help_scroll = 0;
-                            continue;
-                        }
-                        KeyCode::Char('s') => {
-                            let _ = std::fs::write(filename, &*data);
-                            app.dirty = false;
-                            continue;
-                        }
-                        KeyCode::Char('c') => {
-                            if let (Some(start), Some(end)) = (app.sel_start, app.sel_end) {
-                                let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
-                                let len = (hi - lo + 1).min(data.len() - lo);
-                                let selected = &data[lo..lo + len];
-                                let text = match app.mode {
-                                    DisplayMode::Ascii => {
-                                        selected.iter().map(|b| {
-                                            if *b == 0 { '.' }
-                                            else if *b == 0x0d { 'r' }
-                                            else if *b == 10 { '\n' }
-                                            else if *b == 0x1b { 'e' }
-                                            else if (0x01..=0x1f).contains(b) { '.' }
-                                            else if *b == 0x20 { ' ' }
-                                            else if (0x21..=0x7e).contains(b) { *b as char }
-                                            else { '.' }
-                                        }).collect()
-                                    }
-                                    DisplayMode::Hex => {
-                                        selected.iter().map(|b| format!("{:02x}", b))
-                                            .collect::<Vec<_>>().join(" ")
-                                    }
-                                    DisplayMode::Utf8 => {
-                                        let segs = crate::utf8::decode_row(data, lo, len, 0);
-                                        segs.iter().filter_map(|seg| {
-                                            if let crate::utf8::Segment::Char { ch, .. } = seg {
-                                                Some(*ch)
-                                            } else {
-                                                None
-                                            }
-                                        }).collect()
-                                    }
-                                };
-                                let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
-                            }
-                            continue;
-                        }
-                        KeyCode::Char('f') => {
-                            app.input_mode = InputMode::SearchInput;
-                            app.input_prompt = "search hex:".into();
-                            app.input_buf.clear();
-                            continue;
-                        }
-                        KeyCode::Char('p') => {
-                            reopen_browser = true;
-                            should_break = true;
-                            continue;
-                        }
-                        KeyCode::Left => {
-                            if app.input_mode == InputMode::Edit
-                                && app.current_pack > 0
-                            {
-                                app.current_pack -= 1;
-                                app.scroll_top = 0;
-                                app.cursor_byte = app.current_pack * app.pack_size;
-                                app.ensure_cursor_visible(th);
-                            }
-                            continue;
-                        }
-                        KeyCode::Right => {
-                            if app.input_mode == InputMode::Edit
-                                && app.current_pack + 1 < app.total_packs
-                            {
-                                app.current_pack += 1;
-                                app.scroll_top = 0;
-                                app.cursor_byte = app.current_pack * app.pack_size;
-                                app.ensure_cursor_visible(th);
-                            }
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if key.modifiers.contains(KeyModifiers::ALT) {
-                    match key.code {
-                        KeyCode::Char('j') => {
-                            app.sel_start = Some(app.cursor_byte);
-                            continue;
-                        }
-                        KeyCode::Char('k') => {
-                            app.sel_end = Some(app.cursor_byte);
-                            continue;
-                        }
-                        KeyCode::Char('m') => {
-                            app.mode = app.mode.next();
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-
-                app.cursor_focused = true;
-
-                match app.input_mode {
-                InputMode::Help => match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        app.input_mode = InputMode::Normal;
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        app.help_scroll = app.help_scroll.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        app.help_scroll += 1;
-                    }
-                    KeyCode::PageUp => {
-                        app.help_scroll = app.help_scroll.saturating_sub(10);
-                    }
-                    KeyCode::PageDown => {
-                        app.help_scroll += 10;
-                    }
-                    _ => {}
-                }
-                    InputMode::ModeSelect => match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            app.input_mode = InputMode::Normal;
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            app.mode = app.mode.prev();
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            app.mode = app.mode.next();
-                        }
-                        KeyCode::Enter | KeyCode::Char(' ') => {
-                            app.input_mode = InputMode::Normal;
-                        }
-                        KeyCode::Char('1') => { app.mode = DisplayMode::Ascii; app.input_mode = InputMode::Normal; }
-                        KeyCode::Char('2') => { app.mode = DisplayMode::Hex; app.input_mode = InputMode::Normal; }
-                        KeyCode::Char('3') => { app.mode = DisplayMode::Utf8; app.input_mode = InputMode::Normal; }
-                        KeyCode::Char('4') | KeyCode::Char('n') => { app.is_color256 = !app.is_color256; }
-                        _ => {}
-                    }
-                    InputMode::FileBrowser => {
-                        // FileBrowser 模式不在此处理（由 Ctrl+P 触发 run_with_file_browser）
-                        app.input_mode = InputMode::Normal;
-                    }
-                    InputMode::SaveConfirm => handle_save(app, key.code, data, filename, &mut should_break),
-                    InputMode::SearchInput
-                    | InputMode::StringSearchInput
-                    | InputMode::GotoInput
-                    | InputMode::GotoByteInput => {
-                        handle_input(app, key.code, data, th);
-                    }
-                    InputMode::Edit => handle_edit(app, key.code, data, th),
-                    InputMode::Normal => {
-                        handle_normal(app, key.code, data, th, max_rows, &mut should_break)
-                    }
-                }
-                if should_break {
-                    break;
-                }
+                handle_key_event(app, key, data, filename, th, max_rows, &mut reopen_browser, &mut should_break);
             }
             _ => {}
         }
