@@ -1478,7 +1478,10 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 else if app.file_size <= 0xffffff { 6 }
                 else { 8 };
             let offset_str = format!("@{:0width$x}", app.cursor_byte, width = hex_w);
-            let pack_str = format!("pack {:x}/{:x}", app.current_pack + 1, app.total_packs);
+            let max_rows = app.max_rows(area.height);
+            let last_global_row = (app.global_scroll_top() + max_rows - 1).min(app.global_total_rows().saturating_sub(1));
+            let last_pack = last_global_row / (app.pack_size / 16);
+            let pack_str = format!("pack {:x}/{:x}", last_pack + 1, app.total_packs);
             let help_str = "  Ctrl+H:help";
 
             let mode_label = app.mode.label();
