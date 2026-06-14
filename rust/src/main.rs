@@ -1407,7 +1407,29 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
         let rem = 16.min(data.len().saturating_sub(off));
 
         let mut spans: Vec<Span<'a>> = Vec::new();
-        spans.push(Span::raw(format!("{:02x}  ", row_in_pack)));
+        // 行号渐变色：蓝(00) → 紫 → 粉(FF)
+        let hex = format!("{:02x}", row_in_pack);
+        let ratio = row_in_pack as f64 / 255.0;
+        let (r, g, b) = if ratio < 0.5 {
+            let t = ratio * 2.0;
+            (
+                (100.0 + (147.0 - 100.0) * t) as u8,
+                (149.0 + (112.0 - 149.0) * t) as u8,
+                (237.0 + (219.0 - 237.0) * t) as u8,
+            )
+        } else {
+            let t = (ratio - 0.5) * 2.0;
+            (
+                (147.0 + (219.0 - 147.0) * t) as u8,
+                (112.0 + (112.0 - 112.0) * t) as u8,
+                (219.0 + (147.0 - 219.0) * t) as u8,
+            )
+        };
+        let line_color = Color::Rgb(r, g, b);
+        for ch in hex.chars() {
+            spans.push(Span::styled(ch.to_string(), Style::default().fg(line_color)));
+        }
+        spans.push(Span::raw("  "));
 
         if app.mode == DisplayMode::Utf8 {
             for t in 0..cross_row_tail {
