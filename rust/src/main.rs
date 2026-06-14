@@ -145,16 +145,12 @@ fn run(
     data: &mut [u8],
     filename: &str,
 ) -> io::Result<()> {
-    let mut last_scroll = std::time::Instant::now();
+    #[cfg(target_os = "windows")]
+    let mut last_key_time = std::time::Instant::now();
     loop {
         let area = terminal.size()?;
         let th = area.height;
         let max_rows = app.max_rows(th);
-
-        // debounce: dedup rapid Up/Down key-repeat on desktop
-        let now = std::time::Instant::now();
-        let since_scroll = now.duration_since(last_scroll);
-        let debounce = since_scroll.as_millis() < 20;
 
         // drain background search results
         app.drain_search_rx();
@@ -254,6 +250,17 @@ fn run(
                 _ => {}
             },
             Event::Key(key) => {
+                if key.kind == event::KeyEventKind::Release {
+                    continue;
+                }
+                #[cfg(target_os = "windows")]
+                if last_key_time.elapsed().as_millis() < 40 {
+                    continue;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    last_key_time = std::time::Instant::now();
+                }
                 // Ctrl shortcuts (global)
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     match key.code {
@@ -336,12 +343,6 @@ fn run(
 
                 app.cursor_focused = true;
 
-                // debounce rapid repeat of scroll keys
-                let is_scroll_key = matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Char('k') | KeyCode::Char('j'));
-                if is_scroll_key && debounce {
-                    continue;
-                }
-
                 match app.input_mode {
                 InputMode::Help => match key.code {
                     KeyCode::Esc | KeyCode::Char('q') => {
@@ -374,9 +375,6 @@ fn run(
                 }
                 if should_break {
                     break;
-                }
-                if is_scroll_key {
-                    last_scroll = std::time::Instant::now();
                 }
             }
             _ => {}
