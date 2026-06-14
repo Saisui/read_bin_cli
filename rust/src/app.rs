@@ -148,6 +148,32 @@ impl App {
         (self.data_len() + 15) / 16
     }
 
+    /// 文件总行数
+    pub fn global_total_rows(&self) -> usize {
+        (self.file_size + 15) / 16
+    }
+
+    /// 当前视口的全局起始行号
+    pub fn global_scroll_top(&self) -> usize {
+        self.current_pack * (self.pack_size / 16) + self.scroll_top
+    }
+
+    /// 全局行号 → (页号, 页内行号)
+    pub fn global_to_local(&self, grow: usize) -> (usize, usize) {
+        let pack_idx = grow / (self.pack_size / 16);
+        let row_in_pack = grow % (self.pack_size / 16);
+        (pack_idx.min(self.total_packs.saturating_sub(1)), row_in_pack)
+    }
+
+    /// 设置全局滚动位置
+    pub fn set_global_scroll(&mut self, global_row: usize) {
+        let rows_per_pack = self.pack_size / 16;
+        let max_global = self.global_total_rows().saturating_sub(1);
+        let g = global_row.min(max_global);
+        self.current_pack = g / rows_per_pack;
+        self.scroll_top = g % rows_per_pack;
+    }
+
     /// 将字节数格式化为人类可读大小（如 "1.5KB"、"2.0MB"）
     pub fn format_size(size: usize) -> String {
         let mut s = size as f64;
@@ -251,14 +277,17 @@ impl App {
 
     /// 确保光标在可见区域内，必要时切换 pack 或调整 scroll_top
     pub fn ensure_cursor_visible(&mut self, h: u16) {
+        let rows_per_pack = self.pack_size / 16;
         let pk = self.cursor_byte / self.pack_size;
-        if pk != self.current_pack { self.current_pack = pk; }
-        let row = (self.cursor_byte % self.pack_size) / 16;
+        let row_in_pack = (self.cursor_byte % self.pack_size) / 16;
+        let global_row = pk * rows_per_pack + row_in_pack;
+        let gscroll = self.global_scroll_top();
         let mr = self.max_rows(h);
-        if row < self.scroll_top { self.scroll_top = row; }
-        else if row >= self.scroll_top + mr { self.scroll_top = row - mr + 1; }
-        let tr = self.total_rows();
-        self.scroll_top = self.scroll_top.min(tr.saturating_sub(mr));
+        if global_row < gscroll {
+            self.set_global_scroll(global_row);
+        } else if global_row >= gscroll + mr {
+            self.set_global_scroll(global_row.saturating_sub(mr - 1));
+        }
     }
 
     /// 修改单字节并记录到撤销栈

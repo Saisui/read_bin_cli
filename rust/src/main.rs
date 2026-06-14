@@ -156,9 +156,11 @@ fn run(
         app.drain_search_rx();
 
         // clamp scroll
-        let tr = app.total_rows();
-        if app.scroll_top > tr.saturating_sub(max_rows) {
-            app.scroll_top = tr.saturating_sub(max_rows);
+        let gtr = app.global_total_rows();
+        let gs = app.global_scroll_top();
+        let max_gs = gtr.saturating_sub(max_rows);
+        if gs > max_gs {
+            app.set_global_scroll(max_gs);
         }
 
         // pre-compute help popup rect for click-outside detection
@@ -237,11 +239,11 @@ fn run(
                             app.input_mode = InputMode::Normal;
                         }
                     } else if my >= 1 && mx >= 4 && my < area.height.saturating_sub(1) {
-                        let row = my as usize - 1 + app.scroll_top;
+                        let global_row = my as usize - 1 + app.global_scroll_top();
                         let col = mx as usize - 4;
                         let bc = col / 2;
                         if bc < 16 {
-                            let off = app.current_pack * app.pack_size + row * 16 + bc;
+                            let off = global_row * 16 + bc;
                             if off < app.file_size {
                                 app.cursor_byte = off;
                                 app.cursor_focused = true;
@@ -290,11 +292,11 @@ fn run(
                         let mx = mouse.column;
                         let my = mouse.row;
                         if my >= 1 && mx >= 4 && my < area.height.saturating_sub(1) {
-                            let row = my as usize - 1 + app.scroll_top;
+                            let global_row = my as usize - 1 + app.global_scroll_top();
                             let col = mx as usize - 4;
                             let bc = col / 2;
                             if bc < 16 {
-                                let off = app.current_pack * app.pack_size + row * 16 + bc;
+                                let off = global_row * 16 + bc;
                                 if off < app.file_size {
                                     app.cursor_byte = off;
                                     app.sel_end = Some(off);
@@ -812,16 +814,20 @@ fn handle_normal(
             if app.search_active {
                 app.prev_global();
             } else {
-                app.scroll_top = app.scroll_top.saturating_sub(1);
+                let gs = app.global_scroll_top();
+                if gs > 0 {
+                    app.set_global_scroll(gs - 1);
+                }
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.search_active {
                 app.next_global(data);
             } else {
-                let tr = app.total_rows();
-                if app.scroll_top + max_rows < tr {
-                    app.scroll_top += 1;
+                let gs = app.global_scroll_top();
+                let max = app.global_total_rows().saturating_sub(max_rows);
+                if gs < max {
+                    app.set_global_scroll(gs + 1);
                 }
             }
         }
@@ -842,11 +848,13 @@ fn handle_normal(
             }
         }
         KeyCode::Char('K') => {
-            app.scroll_top = app.scroll_top.saturating_sub(max_rows);
+            let gs = app.global_scroll_top();
+            app.set_global_scroll(gs.saturating_sub(max_rows));
         }
         KeyCode::Char('J') => {
-            let tr = app.total_rows();
-            app.scroll_top = (app.scroll_top + max_rows).min(tr.saturating_sub(max_rows));
+            let gs = app.global_scroll_top();
+            let max = app.global_total_rows().saturating_sub(max_rows);
+            app.set_global_scroll((gs + max_rows).min(max));
         }
         KeyCode::Char('H') => {
             let target = app.current_pack.saturating_sub(16);
@@ -878,12 +886,14 @@ fn handle_normal(
         }
         KeyCode::PageUp => {
             let step = (max_rows / 2).max(1);
-            app.scroll_top = app.scroll_top.saturating_sub(step);
+            let gs = app.global_scroll_top();
+            app.set_global_scroll(gs.saturating_sub(step));
         }
         KeyCode::PageDown => {
             let step = (max_rows / 2).max(1);
-            let tr = app.total_rows();
-            app.scroll_top = (app.scroll_top + step).min(tr.saturating_sub(max_rows));
+            let gs = app.global_scroll_top();
+            let max = app.global_total_rows().saturating_sub(max_rows);
+            app.set_global_scroll((gs + step).min(max));
         }
         KeyCode::Home => {
             if app.search_active {
@@ -899,7 +909,7 @@ fn handle_normal(
         }
         KeyCode::Char('O') | KeyCode::Char('o') => {
             if app.search_active {
-                let cur = app.current_pack * app.pack_size + app.scroll_top * 16;
+                let cur = app.global_scroll_top() * 16;
                 let min = cur.saturating_sub(search::FIND_CHUNK);
                 if let Some(ref mut s) = app.search {
                     if let Some(idx) = s.find_after(data, min) {
@@ -911,13 +921,14 @@ fn handle_normal(
                     }
                 }
             } else {
-                app.current_pack = app.current_pack.saturating_sub(256);
-                app.scroll_top = 0;
+                let gs = app.global_scroll_top();
+                let step = 256 * (app.pack_size / 16);
+                app.set_global_scroll(gs.saturating_sub(step));
             }
         }
         KeyCode::Char('P') | KeyCode::Char('p') => {
             if app.search_active {
-                let cur = app.current_pack * app.pack_size + app.scroll_top * 16;
+                let cur = app.global_scroll_top() * 16;
                 let min = cur + search::FIND_CHUNK;
                 if let Some(ref mut s) = app.search {
                     if let Some(idx) = s.find_after(data, min) {
@@ -925,8 +936,10 @@ fn handle_normal(
                     }
                 }
             } else {
-                app.current_pack = (app.current_pack + 256).min(app.total_packs - 1);
-                app.scroll_top = 0;
+                let gs = app.global_scroll_top();
+                let step = 256 * (app.pack_size / 16);
+                let max = app.global_total_rows().saturating_sub(max_rows);
+                app.set_global_scroll((gs + step).min(max));
             }
         }
         _ => {}
@@ -1227,8 +1240,6 @@ fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
 /// 相同类型连续字节交替 dim 增强可读性。
 fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
     let mut lines: Vec<Line<'a>> = Vec::new();
-    let base_off = app.current_pack * app.pack_size;
-    let data = &data_full[base_off..(base_off + app.pack_size).min(data_full.len())];
 
     // gradient header
     let hdr = "    0 1 2 3 4 5 6 7 8 9 a b c d e f ";
@@ -1241,23 +1252,27 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
     }
     lines.push(Line::from(hspans));
 
-    let total_rows = app.total_rows();
+    let global_total = app.global_total_rows();
     let max_rows = app.max_rows(area.height);
-    let start = app.scroll_top;
-    let end = (start + max_rows).min(total_rows);
+    let global_start = app.global_scroll_top();
+    let global_end = (global_start + max_rows).min(global_total);
     let mr = app.current_match_range();
+    let _rows_per_pack = app.pack_size / 16;
 
-    let mut cross_row_tail: usize = 0; // track cross-row UTF-8 tail bytes
-    for r in start..end {
-        let mut spans: Vec<Span<'a>> = Vec::new();
-        spans.push(Span::raw(format!("{:02x}  ", r)));
-        let off = r * 16;
+    let mut cross_row_tail: usize = 0;
+    for gi in global_start..global_end {
+        let (pack_idx, row_in_pack) = app.global_to_local(gi);
+        let base_off = pack_idx * app.pack_size;
+        let data = &data_full[base_off..(base_off + app.pack_size).min(data_full.len())];
+        let off = row_in_pack * 16;
         let rem = 16.min(data.len().saturating_sub(off));
 
+        let mut spans: Vec<Span<'a>> = Vec::new();
+        spans.push(Span::raw(format!("{:02x}  ", row_in_pack)));
+
         if app.mode == DisplayMode::Utf8 {
-            // render cross-row tail bytes as ··
             for t in 0..cross_row_tail {
-                let p = off - cross_row_tail + t; // byte offset of the tail byte
+                let p = off - cross_row_tail + t;
                 let go = base_off + p;
                 let tail_b = data[p];
                 let ts = if app.is_color256 {
@@ -1292,7 +1307,6 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                                 if dw == 1 { format!("{} ", s) } else { s }
                             }
                         };
-                        // track consecutive same-type chars for alternating dim
                         let cur_type = char_type_group(*ch);
                         if cur_type == prev_type {
                             same_count += 1;
@@ -1314,7 +1328,6 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         spans.push(Span::styled(dc, final_sty));
                         for ci in 1..*len {
                             if pos + ci >= rem {
-                                // tail bytes spill into next row
                                 cross_row_tail = *len - ci;
                                 break;
                             }
@@ -1354,7 +1367,6 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 }
                 let b = data[off + i];
                 let go = base_off + off + i;
-                // track consecutive same-type bytes for alternating dim
                 let cur_type = byte_type_group(b, app.mode);
                 if cur_type == prev_type {
                     same_count += 1;
