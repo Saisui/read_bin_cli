@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.1.7 (2026-06-15)
+
+### Code quality
+- `run()` split into `render_frame()`, `handle_mouse_event()`, `handle_key_event()`
+- Doc comments added to all pub functions and fields
+- Code standards documented in CODE_NAV.md
+
+### Visual
+- Line numbers 00-FF with blue→purple→pink gradient
+
+---
+
+## v0.1.6 (2026-06-15)
+
+### Top bar
+- File size and name displayed in top bar
+- Click top bar to open file browser
+
+### Flicker fix
+- Shared terminal between file browser and hex viewer (no teardown/rebuild)
+
+### Help
+- Help text moved to `help.txt` (external, easy to edit)
+- Help scrollbar draggable (click + drag)
+
+### File browser
+- Click again on same item to open (touch-friendly)
+- Mouse click and scroll wheel support
+
+### Bug fixes
+- Selection start byte now highlights correctly (sp(18) → sp(15))
+
+---
+
+## v0.1.5 (2026-06-15)
+
+### File browser
+- No-argument startup shows file browser (navigate dirs, select file)
+- Ctrl+P opens file browser from hex viewer (switch files without restart)
+
+### Search
+- Ctrl+F global search (works in all modes including Edit)
+
+### Scroll
+- Scroll wheel crosses page boundaries (uses global rows)
+
+### Bug fixes
+- Windows: OnceLock color config idempotent on re-entry
+
+---
+
 ## v0.1.4 (2026-06-15)
 
 ### Cross-page seamless scrolling
