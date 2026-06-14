@@ -92,6 +92,7 @@ pub struct App {
     pub sel_end: Option<usize>,
     pub dragging: bool,
     pub help_scroll: usize,
+    pub help_dragging: bool,
     pub help_rect: Option<(u16, u16, u16, u16)>, // x, y, w, h
     pub cursor_focused: bool,
     pub search_rx: Option<mpsc::Receiver<SearchEvent>>,
@@ -128,6 +129,7 @@ impl App {
             sel_end: None,
             dragging: false,
             help_scroll: 0,
+            help_dragging: false,
             help_rect: None,
             cursor_focused: true,
             search_rx: None,
@@ -135,9 +137,9 @@ impl App {
         }
     }
 
-    /// 终端高度可显示的最大行数（减去 1 行列号头 + 1 行状态栏）
+    /// 终端高度可显示的最大行数（减去 1 行顶栏 + 1 行列号头 + 1 行状态栏）
     pub fn max_rows(&self, h: u16) -> usize {
-        (h as usize).saturating_sub(2)
+        (h as usize).saturating_sub(3)
     }
 
     /// 当前 pack 的实际数据长度（最后一 pack 可能不满 4096）
@@ -445,6 +447,7 @@ pub struct FileBrowser {
     pub entries: Vec<DirEntry>,
     pub cursor: usize,
     pub scroll_top: usize,
+    pub last_click_idx: Option<usize>,
 }
 
 impl FileBrowser {
@@ -455,6 +458,7 @@ impl FileBrowser {
             entries: Vec::new(),
             cursor: 0,
             scroll_top: 0,
+            last_click_idx: None,
         };
         fb.refresh_entries();
         fb

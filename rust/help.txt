@@ -1,0 +1,55 @@
+Navigation:
+  ↑↓ / jk    Scroll one line (cross-page)
+  ←→ / hl    Prev/Next pack
+  J / K       Scroll one screen
+  H / L       Jump ±16 packs
+  PGUP/PGDN   Scroll half screen
+  HOME        First row
+  O / P       ±1MB area
+  g/Ctrl+G    Go to offset (hex)
+
+Search:
+  f / Ctrl+F  Hex / nibble pattern search
+  F           Plain string search
+  ↑↓ / ←→    Navigate matches
+  ESC         Clear search
+
+  Search syntax:
+    4f2a        Exact hex bytes
+    4x          Hi nibble=4, lo any
+    [0-3]f      Hi nibble in 0-3, lo=f
+    z            Any single byte
+
+Edit:
+  i           Enter edit mode
+  ESC         Exit edit mode
+  ←→↑↓       Move cursor (cross-page)
+  PGUP/PGDN   Scroll page
+  0-9a-f      Edit nibble (hex)
+  any char    Edit byte (ascii/utf8)
+
+Selection:
+  Mouse drag  Select byte range
+  Alt+J       Selection start
+  Alt+K       Selection end
+  Ctrl+C      Copy selection to clipboard
+
+File:
+  Ctrl+P      Open file browser
+  Ctrl+S      Save file
+
+Display:
+  m / Alt+M   Cycle mode (ASCII/HEX/UTF8)
+  n           Toggle 256-color background
+  Click [ASCII] Open mode dropdown
+
+Status bar (clickable):
+  @address    Goto byte address
+  pack        Goto page number
+  Ctrl+H      This help
+
+Other:
+  Ctrl+Z / Y  Undo / Redo
+  Ctrl+Q / q  Quit
+  Scroll wheel Scroll (cross-page)
+  Scrollbar    Drag to scroll help
