@@ -1,6 +1,6 @@
 [package]
 name = "read-bin"
-version = "0.1.2"
+version = "0.1.2b"
 authors = ["Saisui"]
 edition = "2021"
 
