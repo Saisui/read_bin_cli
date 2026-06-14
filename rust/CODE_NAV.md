@@ -144,6 +144,39 @@ z           → 任意字节（= 两个 Any nibble）
 
 ## 编辑规范
 
+### 代码规范
+
+#### 注释要求
+- **所有 pub 函数必须有 `///` 文档注释**，说明用途、参数、返回值
+- **所有 pub struct 字段必须有注释**，说明含义
+- **复杂逻辑必须有行内注释**，解释"为什么"而非"做什么"
+- **模块顶部必须有模块级注释**，说明模块职责
+
+```rust
+/// 计算文件总行数
+///
+/// 每行 16 字节，向上取整。
+/// 用于跨页滚动的全局行号范围计算。
+pub fn global_total_rows(&self) -> usize {
+    (self.file_size + 15) / 16
+}
+```
+
+#### 命名规范
+- **函数名**：动词开头，如 `draw_hex()`、`handle_input()`、`ensure_visible()`
+- **结构体名**：名词，如 `App`、`FileBrowser`、`DirEntry`
+- **字段名**：名词或形容词，如 `cursor_byte`、`is_color256`、`sel_start`
+- **常量名**：全大写下划线，如 `AUTO_FG_SENTINEL`、`FIND_CHUNK`
+- **枚举变体**：PascalCase，如 `DisplayMode::Ascii`、`InputMode::Normal`
+- **布尔字段**：`is_`/`has_`/`should_` 前缀，如 `is_color256`、`search_active`、`dirty`
+- **避免缩写**：用 `scroll_top` 而非 `st`，用 `current_pack` 而非 `cp`
+
+#### 代码风格
+- **函数长度**：单个函数不超过 100 行，超过则拆分
+- **match 分支**：每个分支不超过 20 行，复杂逻辑提取为辅助函数
+- **错误处理**：`?` 传播或 `map_err` 转换，不吞错误
+- **dead code**：未使用的字段/函数加 `_` 前缀或删除，不留废代码
+
 ### 重命名函数
 ```bash
 # 正确：用 \b word boundary
