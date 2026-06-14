@@ -11,6 +11,7 @@ use crate::search::{Search, SearchEvent};
 pub enum DisplayMode { Ascii, Hex, Utf8 }
 
 impl DisplayMode {
+    /// 切换到下一个显示模式（Ascii → Hex → Utf8 → Ascii）
     pub fn next(self) -> Self {
         match self {
             Self::Ascii => Self::Hex,
@@ -18,6 +19,7 @@ impl DisplayMode {
             Self::Utf8 => Self::Ascii,
         }
     }
+    /// 切换到上一个显示模式（Utf8 → Hex → Ascii → Utf8）
     pub fn prev(self) -> Self {
         match self {
             Self::Ascii => Self::Utf8,
@@ -25,6 +27,7 @@ impl DisplayMode {
             Self::Utf8 => Self::Hex,
         }
     }
+    /// 返回模式的显示标签（如 "[ASCII]"、"[HEX]"、"[UTF8]"）
     pub fn label(self) -> &'static str {
         match self { Self::Ascii => "[ASCII]", Self::Hex => "[HEX]", Self::Utf8 => "[UTF8]" }
     }
@@ -53,8 +56,11 @@ pub enum InputMode {
 
 /// 撤销/重做条目：记录单字节修改
 pub struct UndoEntry {
+    /// 修改的字节偏移
     pub offset: usize,
+    /// 修改前的值
     pub old: u8,
+    /// 修改后的值
     pub new: u8,
 }
 

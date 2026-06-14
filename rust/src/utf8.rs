@@ -20,6 +20,7 @@ pub enum ByteClass {
     Quo,
 }
 
+/// 根据 UTF-8 编码规则，将单个字节归类为对应类型
 pub fn byte_class(b: u8) -> ByteClass {
     match b {
         0x00..=0x7F => ByteClass::Ascii,

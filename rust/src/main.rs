@@ -1080,6 +1080,8 @@ fn sp(n: u8) -> Style {
 }
 
 /// UTF-8 字节分类 → 样式映射
+///
+/// 根据字节类型（Ascii/Duo/Trio/Quo/Tail/Invalid）返回对应的颜色样式。
 fn utf8_cls_style(cls: utf8::ByteClass) -> Style {
     match cls {
         utf8::ByteClass::Ascii => sp(5),
@@ -1091,7 +1093,7 @@ fn utf8_cls_style(cls: utf8::ByteClass) -> Style {
     }
 }
 
-/// 列号渐变色（蓝→绿，用于表头 0-F 的颜色渐变）
+/// 计算渐变色（蓝→绿），用于列号头的颜色渐变
 fn grad_color(i: usize, total: usize) -> Color {
     let t = if total > 1 { i as f64 / (total - 1) as f64 } else { 0.0 };
     let r = ((400.0 + 0.0 * t).min(1000.0) * 255.0 / 1000.0) as u8;
@@ -1239,17 +1241,20 @@ const BRIGHT_COLORS: [(u8,u8,u8); 8] = [
     (85,85,255), (255,85,255), (85,255,255), (255,255,255),
 ];
 
+/// 将 256 色索引转换为 RGB（16-231 为 6×6×6 色立方体）
 fn cube_rgb(idx: u8) -> (u8,u8,u8) {
     let i = (idx - 16) as usize;
     let r = i / 36; let g = (i / 6) % 6; let b = i % 6;
     (if r==0 {0} else {55+r*40} as u8, if g==0 {0} else {55+g*40} as u8, if b==0 {0} else {55+b*40} as u8)
 }
 
+/// 将 256 色索引转换为 RGB（232-255 为 24 级灰度）
 fn gray_rgb(idx: u8) -> (u8,u8,u8) {
     let v = 8 + (idx - 232) * 10;
     (v, v, v)
 }
 
+/// 将 256 色索引转换为 RGB（标准色/亮色/色立方体/灰度）
 fn indexed_rgb(idx: u8) -> (u8,u8,u8) {
     match idx {
         0..=7 => STD_COLORS[idx as usize],
@@ -1259,6 +1264,7 @@ fn indexed_rgb(idx: u8) -> (u8,u8,u8) {
     }
 }
 
+/// 计算 256 色索引的感知亮度（BT.601 公式）
 fn indexed_luminance(idx: u8) -> f64 {
     let (r,g,b) = indexed_rgb(idx);
     0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64
@@ -1267,7 +1273,6 @@ fn indexed_luminance(idx: u8) -> f64 {
 /// 解析 fg: auto 哨兵 → 实际前景色
 ///
 /// 检测 AUTO_FG_SENTINEL，根据当前 bg 亮度选择 Black（亮背景）或 White（暗背景）。
-/// 无 bg 时保持 fg 为 null（使用终端默认前景色）。
 fn resolve_auto_fg(s: Style) -> Style {
     if s.fg == Some(color_config::AUTO_FG_SENTINEL) {
         match s.bg {
