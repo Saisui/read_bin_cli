@@ -2,9 +2,9 @@
 
 ## 项目概览
 
-终端 TUI 十六进制查看/编辑器，Rust 实现。
+终端 TUI 十六进制查看/编辑器，Rust 实现。支持跨页无缝滚动、鼠标拖拽选区、256 色渐变。
 
-**依赖**：ratatui（TUI 框架）、crossterm（终端控制）、memmap2（内存映射文件）
+**依赖**：ratatui（TUI 框架）、crossterm（终端控制）、memmap2（内存映射文件）、arboard（剪贴板）
 
 **构建**：`cargo build --release`，产物在 `target/release/read-bin`
 
@@ -12,8 +12,8 @@
 
 ```
 src/
-├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（最大，~1300 行）
-├── app.rs           # 应用状态管理（分页、光标、搜索、undo/redo）
+├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~1700 行）
+├── app.rs           # 应用状态管理（跨页滚动、光标、搜索、undo/redo）
 ├── color_config.rs  # YAML 颜色配置加载 + fg: auto 逻辑
 ├── search.rs        # 搜索引擎（精确 hex + nibble 模式 + 三级位图索引）
 └── utf8.rs          # UTF-8 字节分类与解码
@@ -23,7 +23,7 @@ src/
 
 ```
 main.rs
- ├── app.rs        （App 状态）
+ ├── app.rs        （App 状态、跨页滚动）
  ├── color_config.rs （ColorConfig 颜色配置）
  ├── search.rs     （Search 搜索状态）
  └── utf8.rs       （ByteClass 字节分类）
@@ -40,42 +40,60 @@ main.rs
 ### 初始化（30-125）
 - `main()`：解析参数，打开文件，加载颜色配置，初始化终端
 
-### 事件循环（127-371）
+### 事件循环（127-380）
 - `run()`：主循环 = 渲染 + 事件处理
-- 鼠标事件：点击定位光标、滚轮翻页
+- 鼠标事件：点击定位光标、拖拽选区、滚轮翻页、底栏点击
 - 键盘事件：Ctrl 快捷键 → 模式分发
+- Release 事件过滤 + Windows 40ms 节流（防双击）
 
-### 输入处理（375-754）
+### 输入处理（385-760）
 - `handle_save()`：保存确认弹窗
-- `handle_input()`：文本输入（搜索/跳转）
+- `handle_input()`：文本输入（搜索/跳转字节地址/跳转页码）
 - `handle_edit()`：编辑模式（光标移动 + 字节编辑）
-- `handle_normal()`：Normal 模式快捷键（最大最复杂）
+- `handle_normal()`：Normal 模式快捷键（跨页滚动）
 
-### 渲染（770-1342）
-- `style_for(n)`：编号 → 样式映射
+### 渲染（1100-1600）
+- `sp(n)`：编号 → 样式映射
 - `resolve()`：样式优先级链（cursor > found > search > selection > edit-dim > base）
 - `resolve_auto_fg()`：fg: auto 哨兵 → 实际 black/white
-- `build_lines()`：构建渲染行（含 UTF-8 跨行处理）
-- `draw_hex()` / `draw_status()` / `draw_help()` / `draw_save_dialog()`
+- `build_lines()`：构建渲染行（跨页渲染，每行独立计算 pack）
+- `draw_hex()` / `draw_status()` / `draw_help()` / `draw_save_dialog()` / `draw_mode_dropdown()`
+
+### 底栏点击区域
+```
+[ASCII]  @00000042  pack 2/5  Ctrl+H:help
+  ↑          ↑          ↑           ↑
+  模式菜单   跳转字节    跳转页      帮助
+```
 
 ## app.rs 导航
 
 ### 枚举
-- `DisplayMode`：Ascii / Hex / Utf8
-- `InputMode`：Normal / Edit / SearchInput / GotoInput / StringSearchInput / SaveConfirm / Help
+- `DisplayMode`：Ascii / Hex / Utf8（含 `next()` / `prev()`）
+- `InputMode`：Normal / Edit / SearchInput / GotoInput / GotoByteInput / StringSearchInput / SaveConfirm / Help / ModeSelect
 
 ### App 核心字段
 - 分页：`file_size`, `pack_size`(4096), `total_packs`, `current_pack`, `scroll_top`
 - 光标：`cursor_byte`, `cursor_nibble`（hex 模式的半字节）
 - 搜索：`search`, `search_active`, `pack_ranges`, `global_match_idx`
 - 编辑：`undo_stack`, `redo_stack`, `dirty`
-- 选区：`sel_start`, `sel_end`
+- 选区：`sel_start`, `sel_end`, `dragging`
+- 显示：`is_color256`
 
-### 关键方法
-- `jump_global()` / `next_global()` / `prev_global()`：搜索导航
+### 跨页滚动方法
+- `global_total_rows()`：文件总行数
+- `global_scroll_top()`：当前视口全局起始行号
+- `global_to_local(grow)`：全局行号 → (页号, 页内行号)
+- `set_global_scroll(g)`：设置全局滚动位置（自动计算 pack + scroll_top）
+- `ensure_cursor_visible()`：跨页光标跟随
+
+### 搜索导航方法
+- `jump_global()` / `next_global()` / `prev_global()`：全局搜索导航
+- `next_page_match()` / `prev_page_match()`：跨页匹配跳转
+
+### 编辑方法
 - `modify()` / `undo()` / `redo()`：字节编辑 + 撤销
 - `edit_hex()` / `edit_char()`：hex/字符编辑
-- `ensure_cursor_visible()`：滚动跟随光标
 
 ## color_config.rs 导航
 
@@ -136,7 +154,7 @@ sed -i 's/\bsp(/style_for(/g' src/main.rs
 
 ### 添加新样式
 1. `color_config.rs`：在 `ColorConfig` 加字段，`parse()` 中解析
-2. `main.rs`：在 `style_for()` 加编号映射
+2. `main.rs`：在 `sp()` 加编号映射
 3. `color.yaml`：加对应条目
 
 ### 添加新字节类型

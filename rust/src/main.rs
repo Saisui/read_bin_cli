@@ -1233,9 +1233,10 @@ fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
-/// 构建渲染行数据
+/// 构建渲染行数据（跨页）
 ///
-/// 包含：文件名头、pack 信息、渐变列号头、数据行。
+/// 以全局行号遍历，每行独立计算所在 pack 和页内偏移。
+/// 支持滚过页边界时无缝渲染相邻页数据。
 /// UTF8 模式下处理跨行多字节序列（tail bytes spill）。
 /// 相同类型连续字节交替 dim 增强可读性。
 fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
@@ -1417,6 +1418,12 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
 }
 
 /// 绘制底部状态栏（模式、偏移、搜索状态、帮助提示）
+///
+/// 底栏可点击区域：
+/// - [ASCII]/[HEX]/[UTF8] → 模式选择下拉菜单
+/// - @address → 跳转到字节地址
+/// - pack → 跳转到指定页
+/// - Ctrl+H:help → 打开帮助窗口
 fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
     f.render_widget(Clear, Rect::new(0, area.height - 1, area.width, 1));
     let text = match app.input_mode {
@@ -1655,6 +1662,10 @@ fn draw_save_dialog(f: &mut ratatui::Frame, app: &App, area: Rect) {
     );
 }
 
+/// 绘制模式选择下拉菜单（从状态栏 [ASCII] 下方展开）
+///
+/// 包含三个模式选项（ASCII/HEX/UTF8）和一个 256 色勾选框。
+/// 点击选项切换模式，点击 256 切换勾选状态。
 fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let modes = [
         (DisplayMode::Ascii, "[ASCII]"),

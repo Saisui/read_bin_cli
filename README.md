@@ -2,7 +2,7 @@
 
 Terminal TUI hex viewer / editor written in Rust.
 
-**Dependencies**: ratatui (TUI framework), crossterm (terminal control), memmap2 (memory-mapped files)
+**Dependencies**: ratatui (TUI framework), crossterm (terminal control), memmap2 (memory-mapped files), arboard (clipboard)
 
 ## Usage
 
@@ -16,7 +16,7 @@ cargo run --release -- <file> --dump
 
 ## Display Modes
 
-Press `m` to cycle through: ASCII → HEX → UTF-8
+Click `[ASCII]` in the status bar to open the mode dropdown, or press `m` to cycle.
 
 | Mode | Description |
 |------|-------------|
@@ -24,17 +24,28 @@ Press `m` to cycle through: ASCII → HEX → UTF-8
 | HEX | All bytes shown as 2-digit hex |
 | UTF-8 | Decode and display UTF-8 characters |
 
+### 256-Color Mode
+
+Toggle with `n` key or the `[256]` checkbox in the mode dropdown. Each byte is rendered with its terminal palette color as background, with auto black/white foreground for readability.
+
+## Cross-Page Scrolling
+
+Scrolling seamlessly crosses page boundaries — no stopping at page edges.
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` / `j` `k` | Scroll one line (cross-page) |
+| `J` / `K` | Scroll one full screen |
+| `PGUP` / `PGDN` | Scroll half screen |
+| `HOME` | Go to first row |
+| `O` / `P` | Jump ±1MB |
+
 ## Navigation
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` / `j` `k` | Scroll one line |
 | `←` `→` / `h` `l` | Previous/Next pack |
-| `J` / `K` | Scroll one full screen |
 | `H` / `L` | Jump ±16 packs |
-| `PGUP` / `PGDN` | Scroll half screen |
-| `O` / `P` | Jump ±1MB |
-| `HOME` | Go to first pack |
 | `g` / `Ctrl+G` | Go to offset (hex input) |
 
 ## Search
@@ -57,7 +68,7 @@ Press `m` to cycle through: ASCII → HEX → UTF-8
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Navigate matches within current pack |
+| `↑` / `↓` | Navigate matches within current view |
 | `←` / `→` | Jump to global prev/next match |
 | `H` / `L` | Jump ±16 packs, find first match |
 | `O` / `P` | Jump ±1MB, find next match |
@@ -70,7 +81,7 @@ Press `i` to enter edit mode. Press `ESC` to exit.
 
 | Key | Action |
 |-----|--------|
-| `←` `→` `↑` `↓` | Move cursor |
+| `←` `→` `↑` `↓` | Move cursor (cross-page) |
 | `0`-`9` `a`-`f` | Edit nibble (HEX mode) |
 | Any character | Edit byte (ASCII/UTF8 mode) |
 | `Enter` | Insert newline (`\n`) in ASCII mode |
@@ -80,15 +91,42 @@ Press `i` to enter edit mode. Press `ESC` to exit.
 
 ## Selection
 
+### Keyboard
+
 | Key | Action |
 |-----|--------|
-| `Alt+J` | Set selection start (bright highlight) |
+| `Alt+J` | Set selection start |
 | `Alt+K` | Set selection end |
 
-## Mouse Support
+### Mouse
 
 - **Click**: Move cursor to clicked byte
+- **Click + Drag**: Select byte range
 - **Scroll wheel**: Scroll up/down
+
+## Clipboard
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+C` | Copy selection to clipboard |
+
+Copy output matches display mode:
+- **ASCII**: printable chars as-is, non-printable as `.`
+- **HEX**: space-separated hex bytes (`48 65 6c 6c 6f`)
+- **UTF-8**: decoded UTF-8 characters
+
+## Status Bar
+
+The bottom status bar has clickable regions:
+
+| Region | Action |
+|--------|--------|
+| `[ASCII]` / `[HEX]` / `[UTF8]` | Open mode dropdown |
+| `@00000042` | Goto byte address |
+| `pack 2/5` | Goto page number |
+| `Ctrl+H:help` | Open help |
+
+When 256-color is enabled, the mode label renders with a per-character gradient (blue → purple → pink).
 
 ## Save & Quit
 
@@ -98,13 +136,11 @@ Press `i` to enter edit mode. Press `ESC` to exit.
 | `q` | Quit (prompts to save if modified) |
 | `Ctrl+Q` | Quit (prompts to save if modified) |
 
-## Other
+## Help
 
 | Key | Action |
 |-----|--------|
 | `?` / `Ctrl+H` | Show help |
-| `Alt+M` | Toggle display mode |
-| `m` | Cycle display mode (ASCII/HEX/UTF8) |
 
 ## Color Configuration
 

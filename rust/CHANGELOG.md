@@ -10,6 +10,9 @@
 - Mouse click and drag work across page boundaries
 - O/P (±1MB jump) uses global rows
 
+### Status bar improvement
+- Pack display shows last visible page number (not first)
+
 ---
 
 ## v0.1.3 (2026-06-15)

@@ -133,7 +133,7 @@ impl App {
         }
     }
 
-    /// 终端高度可显示的最大行数（减去 3 行头部 + 1 行状态栏）
+    /// 终端高度可显示的最大行数（减去 1 行列号头 + 1 行状态栏）
     pub fn max_rows(&self, h: u16) -> usize {
         (h as usize).saturating_sub(2)
     }
@@ -148,24 +148,26 @@ impl App {
         (self.data_len() + 15) / 16
     }
 
-    /// 文件总行数
+    /// 文件总行数（跨页全局行数）
     pub fn global_total_rows(&self) -> usize {
         (self.file_size + 15) / 16
     }
 
-    /// 当前视口的全局起始行号
+    /// 当前视口的全局起始行号 = current_pack * 每页行数 + scroll_top
     pub fn global_scroll_top(&self) -> usize {
         self.current_pack * (self.pack_size / 16) + self.scroll_top
     }
 
     /// 全局行号 → (页号, 页内行号)
+    ///
+    /// 用于 build_lines 跨页渲染：给定全局行号，计算它落在哪个 pack 以及 pack 内的行偏移。
     pub fn global_to_local(&self, grow: usize) -> (usize, usize) {
         let pack_idx = grow / (self.pack_size / 16);
         let row_in_pack = grow % (self.pack_size / 16);
         (pack_idx.min(self.total_packs.saturating_sub(1)), row_in_pack)
     }
 
-    /// 设置全局滚动位置
+    /// 设置全局滚动位置（自动计算 current_pack 和 scroll_top）
     pub fn set_global_scroll(&mut self, global_row: usize) {
         let rows_per_pack = self.pack_size / 16;
         let max_global = self.global_total_rows().saturating_sub(1);
@@ -275,7 +277,10 @@ impl App {
         false
     }
 
-    /// 确保光标在可见区域内，必要时切换 pack 或调整 scroll_top
+    /// 确保光标在可见区域内（跨页）
+    ///
+    /// 根据光标全局行号与当前视口全局起始行号比较，
+    /// 必要时通过 set_global_scroll 调整视口位置。
     pub fn ensure_cursor_visible(&mut self, h: u16) {
         let rows_per_pack = self.pack_size / 16;
         let pk = self.cursor_byte / self.pack_size;
