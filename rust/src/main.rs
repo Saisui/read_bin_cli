@@ -15,6 +15,7 @@ mod utf8;
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use crossterm::{
@@ -41,101 +42,115 @@ use app::{App, DisplayMode, InputMode};
 ///
 /// 支持 `--dump` 模式（纯文本 hex dump）和 TUI 交互模式。
 /// 初始化终端、加载颜色配置、启动事件循环。
+/// 无参数时进入文件浏览器，Ctrl+P 可随时重新打开文件浏览器。
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <file> [--dump]", args[0]);
-        std::process::exit(1);
-    }
-    let filename = args[1].clone();
     let dump = args.get(2).map(|s| s.as_str()) == Some("--dump");
 
-    let file = if dump {
-        File::open(&filename)?
+    let mut filename = if args.len() < 2 {
+        String::new()
     } else {
-        OpenOptions::new().read(true).open(&filename)?
+        args[1].clone()
     };
-    let file_size = file.metadata()?.len() as usize;
-    if file_size == 0 {
-        eprintln!("Empty file");
-        return Ok(());
-    }
 
-    if dump {
+    loop {
+        // 如果没有文件，进入文件浏览器
+        if filename.is_empty() {
+            match run_file_browser_only(dump)? {
+                Some(path) => filename = path,
+                None => return Ok(()),
+            }
+        }
+
+        let file = if dump {
+            File::open(&filename)?
+        } else {
+            OpenOptions::new().read(true).open(&filename)?
+        };
+        let file_size = file.metadata()?.len() as usize;
+        if file_size == 0 {
+            eprintln!("Empty file");
+            return Ok(());
+        }
+
+        if dump {
+            let mmap = unsafe { Mmap::map(&file)? };
+            let data: &[u8] = &mmap;
+            let name = std::path::Path::new(&filename)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| filename.clone());
+            println!("{}  ({})", name, App::format_size(file_size));
+            println!("    0 1 2 3 4 5 6 7 8 9 a b c d e f ");
+            for r in 0..(data.len() + 15) / 16 {
+                print!("{:04x}  ", r);
+                let off = r * 16;
+                for i in 0..16 {
+                    if off + i < data.len() {
+                        print!("{:02x} ", data[off + i]);
+                    } else {
+                        print!("   ");
+                    }
+                }
+                print!(" |");
+                for i in 0..16 {
+                    if off + i < data.len() {
+                        let b = data[off + i];
+                        print!("{}", if (0x20..=0x7e).contains(&b) { b as char } else { '.' });
+                    }
+                }
+                println!("|");
+            }
+            return Ok(());
+        }
+
         let mmap = unsafe { Mmap::map(&file)? };
-        let data: &[u8] = &mmap;
-        let name = std::path::Path::new(&filename)
+        let mut data = mmap[..file_size].to_vec();
+
+        // 首次加载颜色配置，后续调用忽略（OnceLock 已设置）
+        let _ = init_colors(std::path::Path::new("color.yaml"));
+        color_config::init_terminal_palette(
+            &std::path::Path::new(&std::env::var("HOME").unwrap_or_default()),
+        );
+
+        enable_raw_mode()
+            .map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture).map_err(|e| {
+            io::Error::new(e.kind(), format!("EnterAlternateScreen/EnableMouseCapture: {}", e))
+        })?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)
+            .map_err(|e| io::Error::new(e.kind(), format!("Terminal::new: {}", e)))?;
+        terminal.clear()?;
+
+        let base_name = std::path::Path::new(&filename)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| filename.clone());
-        println!("{}  ({})", name, App::format_size(file_size));
-        println!("    0 1 2 3 4 5 6 7 8 9 a b c d e f ");
-        for r in 0..(data.len() + 15) / 16 {
-            print!("{:04x}  ", r);
-            let off = r * 16;
-            for i in 0..16 {
-                if off + i < data.len() {
-                    print!("{:02x} ", data[off + i]);
-                } else {
-                    print!("   ");
-                }
+        let mut app = App::new(file_size, base_name);
+        let reopen = run(&mut terminal, &mut app, &mut data, &filename);
+
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+
+        match reopen {
+            Ok(true) => {
+                // Ctrl+P: 清空文件名，下轮循环进入文件浏览器
+                filename.clear();
             }
-            print!(" |");
-            for i in 0..16 {
-                if off + i < data.len() {
-                    let b = data[off + i];
-                    print!("{}", if (0x20..=0x7e).contains(&b) { b as char } else { '.' });
-                }
+            Ok(false) => return Ok(()),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                return Ok(());
             }
-            println!("|");
         }
-        return Ok(());
     }
-
-    let mmap = unsafe { Mmap::map(&file)? };
-    let mut data = mmap[..file_size].to_vec();
-
-    // load color config (embedded defaults if color.yaml missing)
-    if let Err(e) = init_colors(std::path::Path::new("color.yaml")) {
-        eprintln!("color.yaml: {e}");
-        return Err(io::Error::new(io::ErrorKind::Other, e));
-    }
-
-    // load terminal palette for accurate dimming
-    color_config::init_terminal_palette(
-        &std::path::Path::new(&std::env::var("HOME").unwrap_or_default()),
-    );
-
-    enable_raw_mode()
-        .map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).map_err(|e| {
-        io::Error::new(e.kind(), format!("EnterAlternateScreen/EnableMouseCapture: {}", e))
-    })?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)
-        .map_err(|e| io::Error::new(e.kind(), format!("Terminal::new: {}", e)))?;
-    terminal.clear()?;
-
-    let base_name = std::path::Path::new(&filename)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| filename.clone());
-    let mut app = App::new(file_size, base_name);
-    let result = run(&mut terminal, &mut app, &mut data, &filename);
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(e) = result {
-        eprintln!("Error: {}", e);
-    }
-    Ok(())
 }
 
 /// 主事件循环：渲染 → 处理输入 → 重复
@@ -144,10 +159,13 @@ fn run(
     app: &mut App,
     data: &mut [u8],
     filename: &str,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     #[cfg(target_os = "windows")]
     let mut last_key_time = std::time::Instant::now();
+    let mut reopen_browser = false;
+    let mut should_break = false;
     loop {
+        if should_break { break; }
         let area = terminal.size()?;
         let th = area.height;
         let max_rows = app.max_rows(th);
@@ -206,7 +224,6 @@ fn run(
 
         // handle input
         let evt = event::read()?;
-        let mut should_break = false;
         match evt {
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -319,17 +336,21 @@ fn run(
                     if app.input_mode == InputMode::Help {
                         app.help_scroll = app.help_scroll.saturating_sub(1);
                     } else {
-                        app.scroll_top = app.scroll_top.saturating_sub(3);
+                        let gs = app.global_scroll_top();
+                        if gs >= 3 {
+                            app.set_global_scroll(gs - 3);
+                        } else {
+                            app.set_global_scroll(0);
+                        }
                     }
                 }
                 MouseEventKind::ScrollDown => {
                     if app.input_mode == InputMode::Help {
                         app.help_scroll += 1;
                     } else {
-                        let tr = app.total_rows();
-                        if app.scroll_top + 3 + max_rows <= tr {
-                            app.scroll_top += 3;
-                        }
+                        let gs = app.global_scroll_top();
+                        let max = app.global_total_rows().saturating_sub(max_rows);
+                        app.set_global_scroll((gs + 3).min(max));
                     }
                 }
                 _ => {}
@@ -419,6 +440,17 @@ fn run(
                             }
                             continue;
                         }
+                        KeyCode::Char('f') => {
+                            app.input_mode = InputMode::SearchInput;
+                            app.input_prompt = "search hex:".into();
+                            app.input_buf.clear();
+                            continue;
+                        }
+                        KeyCode::Char('p') => {
+                            reopen_browser = true;
+                            should_break = true;
+                            continue;
+                        }
                         KeyCode::Left => {
                             if app.input_mode == InputMode::Edit
                                 && app.current_pack > 0
@@ -503,6 +535,10 @@ fn run(
                         KeyCode::Char('4') | KeyCode::Char('n') => { app.is_color256 = !app.is_color256; }
                         _ => {}
                     }
+                    InputMode::FileBrowser => {
+                        // FileBrowser 模式不在此处理（由 Ctrl+P 触发 run_with_file_browser）
+                        app.input_mode = InputMode::Normal;
+                    }
                     InputMode::SaveConfirm => handle_save(app, key.code, data, filename, &mut should_break),
                     InputMode::SearchInput
                     | InputMode::StringSearchInput
@@ -522,10 +558,8 @@ fn run(
             _ => {}
         }
     }
-    Ok(())
+    Ok(reopen_browser)
 }
-
-
 
 /// 保存确认弹窗的输入处理（y/n/space/esc）
 fn handle_save(app: &mut App, code: KeyCode, data: &mut [u8], filename: &str, do_break: &mut bool) {
@@ -1521,6 +1555,12 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
+        InputMode::FileBrowser => {
+            return f.render_widget(
+                Paragraph::new(Span::styled("File Browser", sp(5))),
+                Rect::new(0, area.height - 1, area.width, 1),
+            );
+        }
     };
     f.render_widget(
         Paragraph::new(Span::styled(text, sp(5))),
@@ -1695,4 +1735,132 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         Paragraph::new(Span::styled(checkbox, cb_style)),
         Rect::new(dx, dy + 3, dw, 1),
     );
+}
+
+/// 绘制文件浏览器
+///
+/// 显示当前目录路径、文件列表（目录在前，文件在后）、操作提示。
+/// 选中行高亮，目录用 `/` 后缀标记。
+fn draw_file_browser(f: &mut ratatui::Frame, fb: &app::FileBrowser, area: Rect) {
+    // 路径行
+    let path_str = format!("Path: {}", fb.current_dir.display());
+    f.render_widget(
+        Paragraph::new(Span::styled(path_str, Style::default().fg(Color::Cyan))),
+        Rect::new(0, 0, area.width, 1),
+    );
+
+    // 文件列表
+    let list_area = Rect::new(0, 1, area.width, area.height.saturating_sub(2));
+    let max_rows = list_area.height as usize;
+    let mut spans_list: Vec<Line> = Vec::new();
+
+    for i in 0..max_rows {
+        let idx = fb.scroll_top + i;
+        if idx >= fb.entries.len() {
+            break;
+        }
+        let entry = &fb.entries[idx];
+        let display = if entry.is_dir {
+            format!("  {}/", entry.name)
+        } else {
+            format!("  {}", entry.name)
+        };
+        let sty = if idx == fb.cursor {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else if entry.is_dir {
+            Style::default().fg(Color::Blue)
+        } else {
+            Style::default()
+        };
+        spans_list.push(Line::from(Span::styled(display, sty)));
+    }
+    f.render_widget(Paragraph::new(spans_list), list_area);
+
+    // 底部提示
+    let help = "↑↓:navigate Enter:open Backspace:up q:quit";
+    f.render_widget(
+        Paragraph::new(Span::styled(help, sp(5))),
+        Rect::new(0, area.height - 1, area.width, 1),
+    );
+}
+
+/// 运行文件浏览器（仅浏览器，不打开文件）
+///
+/// 返回 Some(path) 表示选中了文件，None 表示用户退出。
+fn run_file_browser_only(dump: bool) -> io::Result<Option<String>> {
+    let start_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut fb = app::FileBrowser::new(start_dir);
+
+    enable_raw_mode()
+        .map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).map_err(|e| {
+        io::Error::new(e.kind(), format!("EnterAlternateScreen/EnableMouseCapture: {}", e))
+    })?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)
+        .map_err(|e| io::Error::new(e.kind(), format!("Terminal::new: {}", e)))?;
+    terminal.clear()?;
+
+    let result: io::Result<Option<String>> = (|| {
+        loop {
+            let area = terminal.size()?;
+            let max_rows = (area.height as usize).saturating_sub(2);
+            fb.ensure_visible(max_rows);
+
+            terminal.draw(|f| {
+                let area = f.area();
+                draw_file_browser(f, &fb, area);
+            })?;
+
+            let evt = event::read()?;
+            if let Event::Key(key) = evt {
+                if key.kind == event::KeyEventKind::Release {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        return Ok(None);
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        fb.move_up();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        fb.move_down();
+                    }
+                    KeyCode::PageUp => {
+                        fb.page_up(max_rows);
+                    }
+                    KeyCode::PageDown => {
+                        fb.page_down(max_rows);
+                    }
+                    KeyCode::Enter => {
+                        if let Some(path) = fb.enter() {
+                            return Ok(Some(path.to_string_lossy().to_string()));
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        if fb.current_dir.parent().is_some() {
+                            let new_dir = fb.current_dir.parent()
+                                .unwrap_or(&fb.current_dir)
+                                .to_path_buf();
+                            fb.current_dir = new_dir;
+                            fb.refresh_entries();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    })();
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    result
 }

@@ -1,7 +1,8 @@
 /// 应用状态管理模块
 ///
-/// 管理文件分页、光标位置、显示模式、搜索状态、撤销/重做栈。
+/// 管理文件分页、光标位置、显示模式、搜索状态、撤销/做栈。
 /// 不直接处理渲染或输入事件，由 main.rs 驱动。
+use std::path::PathBuf;
 use std::sync::mpsc;
 use crate::search::{Search, SearchEvent};
 
@@ -47,6 +48,7 @@ pub enum InputMode {
     SaveConfirm,
     Help,
     ModeSelect,
+    FileBrowser,
 }
 
 /// 撤销/重做条目：记录单字节修改
@@ -424,5 +426,130 @@ impl App {
             }
         }
         self.refresh_pack();
+    }
+}
+
+/// 文件浏览器条目
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+/// 文件浏览器状态
+///
+/// 用于无参数启动或 Ctrl+P 打开新文件时的目录浏览。
+/// 显示当前目录内容，支持上下导航、进入目录、返回上级。
+pub struct FileBrowser {
+    pub current_dir: PathBuf,
+    pub entries: Vec<DirEntry>,
+    pub cursor: usize,
+    pub scroll_top: usize,
+}
+
+impl FileBrowser {
+    /// 创建文件浏览器，从指定目录开始
+    pub fn new(dir: PathBuf) -> Self {
+        let mut fb = Self {
+            current_dir: dir,
+            entries: Vec::new(),
+            cursor: 0,
+            scroll_top: 0,
+        };
+        fb.refresh_entries();
+        fb
+    }
+
+    /// 刷新目录条目列表
+    ///
+    /// 读取当前目录，排序：../ 在最前，然后目录按名称排序，最后文件按名称排序。
+    pub fn refresh_entries(&mut self) {
+        self.entries.clear();
+        self.cursor = 0;
+        self.scroll_top = 0;
+
+        // 添加 ../ （除非在根目录）
+        if self.current_dir.parent().is_some() {
+            self.entries.push(DirEntry {
+                name: "..".to_string(),
+                is_dir: true,
+                size: 0,
+            });
+        }
+
+        if let Ok(read_dir) = std::fs::read_dir(&self.current_dir) {
+            let mut dirs = Vec::new();
+            let mut files = Vec::new();
+            for entry in read_dir.flatten() {
+                let metadata = entry.metadata().ok();
+                let name = entry.file_name().to_string_lossy().to_string();
+                let is_dir = metadata.as_ref().map_or(false, |m| m.is_dir());
+                let size = metadata.as_ref().map_or(0, |m| m.len());
+                if is_dir {
+                    dirs.push(DirEntry { name, is_dir: true, size: 0 });
+                } else {
+                    files.push(DirEntry { name, is_dir: false, size });
+                }
+            }
+            dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            self.entries.extend(dirs);
+            self.entries.extend(files);
+        }
+    }
+
+    /// 进入指定光标位置的目录或返回文件路径
+    ///
+    /// 返回 Some(path) 表示选中了文件，None 表示进入了目录。
+    pub fn enter(&mut self) -> Option<PathBuf> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let entry = &self.entries[self.cursor];
+        if entry.is_dir {
+            let new_dir = if entry.name == ".." {
+                self.current_dir.parent().unwrap_or(&self.current_dir).to_path_buf()
+            } else {
+                self.current_dir.join(&entry.name)
+            };
+            self.current_dir = new_dir;
+            self.refresh_entries();
+            None
+        } else {
+            Some(self.current_dir.join(&entry.name))
+        }
+    }
+
+    /// 光标上移
+    pub fn move_up(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    /// 光标下移
+    pub fn move_down(&mut self) {
+        if self.cursor + 1 < self.entries.len() {
+            self.cursor += 1;
+        }
+    }
+
+    /// 光标翻页
+    pub fn page_up(&mut self, page_size: usize) {
+        self.cursor = self.cursor.saturating_sub(page_size);
+    }
+
+    /// 光标翻页
+    pub fn page_down(&mut self, page_size: usize) {
+        self.cursor = (self.cursor + page_size).min(self.entries.len().saturating_sub(1));
+    }
+
+    /// 确保光标在可见区域内
+    pub fn ensure_visible(&mut self, max_rows: usize) {
+        if self.cursor < self.scroll_top {
+            self.scroll_top = self.cursor;
+        } else if self.cursor >= self.scroll_top + max_rows {
+            self.scroll_top = self.cursor - max_rows + 1;
+        }
     }
 }
