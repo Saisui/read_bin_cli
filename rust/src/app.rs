@@ -17,6 +17,13 @@ impl DisplayMode {
             Self::Utf8 => Self::Ascii,
         }
     }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Ascii => Self::Utf8,
+            Self::Hex => Self::Ascii,
+            Self::Utf8 => Self::Hex,
+        }
+    }
     pub fn label(self) -> &'static str {
         match self { Self::Ascii => "[ASCII]", Self::Hex => "[HEX]", Self::Utf8 => "[UTF8]" }
     }
@@ -35,9 +42,11 @@ pub enum InputMode {
     Edit,
     SearchInput,
     GotoInput,
+    GotoByteInput,
     StringSearchInput,
     SaveConfirm,
     Help,
+    ModeSelect,
 }
 
 /// 撤销/重做条目：记录单字节修改
@@ -79,6 +88,7 @@ pub struct App {
     pub save_selected: bool,
     pub sel_start: Option<usize>,
     pub sel_end: Option<usize>,
+    pub dragging: bool,
     pub help_scroll: usize,
     pub help_rect: Option<(u16, u16, u16, u16)>, // x, y, w, h
     pub cursor_focused: bool,
@@ -114,6 +124,7 @@ impl App {
             save_selected: false,
             sel_start: None,
             sel_end: None,
+            dragging: false,
             help_scroll: 0,
             help_rect: None,
             cursor_focused: true,
@@ -124,7 +135,7 @@ impl App {
 
     /// 终端高度可显示的最大行数（减去 3 行头部 + 1 行状态栏）
     pub fn max_rows(&self, h: u16) -> usize {
-        (h as usize).saturating_sub(4)
+        (h as usize).saturating_sub(2)
     }
 
     /// 当前 pack 的实际数据长度（最后一 pack 可能不满 4096）

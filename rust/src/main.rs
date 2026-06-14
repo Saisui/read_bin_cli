@@ -190,6 +190,11 @@ fn run(
                     draw_hex(f, app, data, area);
                     draw_save_dialog(f, app, area);
                 }
+                InputMode::ModeSelect => {
+                    draw_hex(f, app, data, area);
+                    draw_status(f, app, data, area);
+                    draw_mode_dropdown(f, app, area);
+                }
                 _ => {
                     draw_hex(f, app, data, area);
                     draw_status(f, app, data, area);
@@ -212,8 +217,27 @@ fn run(
                             app.input_mode = InputMode::Normal;
                             app.help_rect = None;
                         }
-                    } else if my >= 3 && mx >= 4 && my < area.height.saturating_sub(1) {
-                        let row = my as usize - 3 + app.scroll_top;
+                    } else if app.input_mode == InputMode::ModeSelect {
+                        let dh = 5u16;
+                        let dy = area.height.saturating_sub(1) - dh;
+                        let dw = 10u16;
+                        if mx < dw && my >= dy && my < dy + dh {
+                            let sel = my - dy;
+                            match sel {
+                                0 => app.mode = DisplayMode::Ascii,
+                                1 => app.mode = DisplayMode::Hex,
+                                2 => app.mode = DisplayMode::Utf8,
+                                3 => app.is_color256 = !app.is_color256,
+                                _ => {}
+                            }
+                            if sel <= 2 {
+                                app.input_mode = InputMode::Normal;
+                            }
+                        } else {
+                            app.input_mode = InputMode::Normal;
+                        }
+                    } else if my >= 1 && mx >= 4 && my < area.height.saturating_sub(1) {
+                        let row = my as usize - 1 + app.scroll_top;
                         let col = mx as usize - 4;
                         let bc = col / 2;
                         if bc < 16 {
@@ -221,6 +245,9 @@ fn run(
                             if off < app.file_size {
                                 app.cursor_byte = off;
                                 app.cursor_focused = true;
+                                app.sel_start = Some(off);
+                                app.sel_end = Some(off);
+                                app.dragging = true;
                                 app.ensure_cursor_visible(th);
                             }
                         }
@@ -228,6 +255,62 @@ fn run(
                         app.cursor_focused = false;
                         app.sel_start = None;
                         app.sel_end = None;
+                    }
+                    // status bar click
+                    if my == area.height.saturating_sub(1) && app.input_mode == InputMode::Normal {
+                        let dirty_len = if app.dirty { 11 } else { 0 };
+                        let hex_w = if app.file_size <= 0xff { 2 }
+                            else if app.file_size <= 0xffff { 4 }
+                            else if app.file_size <= 0xffffff { 6 }
+                            else { 8 };
+                        let at_offset = (6 + dirty_len + 2) as u16;
+                        let at_len = (1 + hex_w) as u16;
+                        let pack_offset = at_offset + at_len + 2;
+                        let pack_total_hex = format!("{:x}", app.total_packs).len();
+                        let pack_len = (5 + hex_w + 1 + pack_total_hex) as u16;
+                        let help_offset = pack_offset + pack_len + 2;
+                        if mx < 7 {
+                            app.input_mode = InputMode::ModeSelect;
+                        } else if mx >= at_offset && mx < at_offset + at_len {
+                            app.input_mode = InputMode::GotoByteInput;
+                            app.input_buf.clear();
+                            app.input_prompt = "Go to byte (hex):".into();
+                        } else if mx >= pack_offset && mx < pack_offset + pack_len {
+                            app.input_mode = InputMode::GotoInput;
+                            app.input_buf.clear();
+                            app.input_prompt = "Go to pack (hex):".into();
+                        } else if mx >= help_offset {
+                            app.input_mode = InputMode::Help;
+                            app.help_scroll = 0;
+                        }
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if app.dragging {
+                        let mx = mouse.column;
+                        let my = mouse.row;
+                        if my >= 1 && mx >= 4 && my < area.height.saturating_sub(1) {
+                            let row = my as usize - 1 + app.scroll_top;
+                            let col = mx as usize - 4;
+                            let bc = col / 2;
+                            if bc < 16 {
+                                let off = app.current_pack * app.pack_size + row * 16 + bc;
+                                if off < app.file_size {
+                                    app.cursor_byte = off;
+                                    app.sel_end = Some(off);
+                                    app.ensure_cursor_visible(th);
+                                }
+                            }
+                        }
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if app.dragging {
+                        app.dragging = false;
+                        if app.sel_start == app.sel_end {
+                            app.sel_start = None;
+                            app.sel_end = None;
+                        }
                     }
                 }
                 MouseEventKind::ScrollUp => {
@@ -297,6 +380,43 @@ fn run(
                             app.dirty = false;
                             continue;
                         }
+                        KeyCode::Char('c') => {
+                            if let (Some(start), Some(end)) = (app.sel_start, app.sel_end) {
+                                let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+                                let len = (hi - lo + 1).min(data.len() - lo);
+                                let selected = &data[lo..lo + len];
+                                let text = match app.mode {
+                                    DisplayMode::Ascii => {
+                                        selected.iter().map(|b| {
+                                            if *b == 0 { '.' }
+                                            else if *b == 0x0d { 'r' }
+                                            else if *b == 10 { '\n' }
+                                            else if *b == 0x1b { 'e' }
+                                            else if (0x01..=0x1f).contains(b) { '.' }
+                                            else if *b == 0x20 { ' ' }
+                                            else if (0x21..=0x7e).contains(b) { *b as char }
+                                            else { '.' }
+                                        }).collect()
+                                    }
+                                    DisplayMode::Hex => {
+                                        selected.iter().map(|b| format!("{:02x}", b))
+                                            .collect::<Vec<_>>().join(" ")
+                                    }
+                                    DisplayMode::Utf8 => {
+                                        let segs = crate::utf8::decode_row(data, lo, len, 0);
+                                        segs.iter().filter_map(|seg| {
+                                            if let crate::utf8::Segment::Char { ch, .. } = seg {
+                                                Some(*ch)
+                                            } else {
+                                                None
+                                            }
+                                        }).collect()
+                                    }
+                                };
+                                let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
+                            }
+                            continue;
+                        }
                         KeyCode::Left => {
                             if app.input_mode == InputMode::Edit
                                 && app.current_pack > 0
@@ -362,10 +482,30 @@ fn run(
                     }
                     _ => {}
                 }
+                    InputMode::ModeSelect => match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            app.input_mode = InputMode::Normal;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.mode = app.mode.prev();
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.mode = app.mode.next();
+                        }
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            app.input_mode = InputMode::Normal;
+                        }
+                        KeyCode::Char('1') => { app.mode = DisplayMode::Ascii; app.input_mode = InputMode::Normal; }
+                        KeyCode::Char('2') => { app.mode = DisplayMode::Hex; app.input_mode = InputMode::Normal; }
+                        KeyCode::Char('3') => { app.mode = DisplayMode::Utf8; app.input_mode = InputMode::Normal; }
+                        KeyCode::Char('4') | KeyCode::Char('n') => { app.is_color256 = !app.is_color256; }
+                        _ => {}
+                    }
                     InputMode::SaveConfirm => handle_save(app, key.code, data, filename, &mut should_break),
                     InputMode::SearchInput
                     | InputMode::StringSearchInput
-                    | InputMode::GotoInput => {
+                    | InputMode::GotoInput
+                    | InputMode::GotoByteInput => {
                         handle_input(app, key.code, data, th);
                     }
                     InputMode::Edit => handle_edit(app, key.code, data, th),
@@ -441,6 +581,28 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                                 app.current_pack = target;
                                 app.scroll_top = 0;
                             }
+                            app.cursor_byte = app.current_pack * app.pack_size;
+                            app.cursor_focused = true;
+                            app.ensure_cursor_visible(th);
+                        }
+                    }
+                }
+                InputMode::GotoByteInput => {
+                    if let Some(val) = parse_hex_input(&buf) {
+                        if val < app.file_size {
+                            if app.search_active {
+                                if let Some(ref mut s) = app.search {
+                                    if let Some(idx) = s.find_after(data, val) {
+                                        app.jump_global(idx);
+                                    }
+                                }
+                            } else {
+                                app.current_pack = val / app.pack_size;
+                                app.scroll_top = (val % app.pack_size) / 16;
+                            }
+                            app.cursor_byte = val;
+                            app.cursor_focused = true;
+                            app.ensure_cursor_visible(th);
                         }
                     }
                 }
@@ -1068,19 +1230,6 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
     let base_off = app.current_pack * app.pack_size;
     let data = &data_full[base_off..(base_off + app.pack_size).min(data_full.len())];
 
-    lines.push(Line::from(Span::raw(format!(
-        "{}  ({})",
-        app.filename,
-        App::format_size(app.file_size)
-    ))));
-
-    let pack_str = format!("{:x} / {:x}", app.current_pack + 1, app.total_packs);
-    let mut mode_str = app.mode.label().to_string();
-    if app.input_mode == InputMode::Edit {
-        mode_str.push_str(" [EDIT]");
-    }
-    lines.push(Line::from(Span::raw(format!("pack: {}  {}", pack_str, mode_str))));
-
     // gradient header
     let hdr = "    0 1 2 3 4 5 6 7 8 9 a b c d e f ";
     let leading = 4;
@@ -1257,6 +1406,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
 
 /// 绘制底部状态栏（模式、偏移、搜索状态、帮助提示）
 fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
+    f.render_widget(Clear, Rect::new(0, area.height - 1, area.width, 1));
     let text = match app.input_mode {
         InputMode::Edit => {
             let byte_info = if app.mode != DisplayMode::Hex && app.cursor_byte < app.file_size {
@@ -1277,7 +1427,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
-        InputMode::SearchInput | InputMode::StringSearchInput | InputMode::GotoInput => {
+        InputMode::SearchInput | InputMode::StringSearchInput | InputMode::GotoInput | InputMode::GotoByteInput => {
             return f.render_widget(
                 Paragraph::new(Span::raw(format!(
                     "{} {}",
@@ -1310,20 +1460,42 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 }
             }
             let dirty = if app.dirty { " [MODIFIED]" } else { "" };
-            let c256 = if app.is_color256 { " [256]" } else { "" };
             // hex width based on file size
             let hex_w = if app.file_size <= 0xff { 2 }
                 else if app.file_size <= 0xffff { 4 }
                 else if app.file_size <= 0xffffff { 6 }
                 else { 8 };
-            let s = format!(
-                "{}{}{}  @{:0width$x}  pack {}/{}  Ctrl+H:help",
-                app.mode.label(), dirty, c256, app.cursor_byte,
-                app.current_pack + 1, app.total_packs,
-                width = hex_w
-            );
+            let offset_str = format!("@{:0width$x}", app.cursor_byte, width = hex_w);
+            let pack_str = format!("pack {:x}/{:x}", app.current_pack + 1, app.total_packs);
+            let help_str = "  Ctrl+H:help";
+
+            let mode_label = app.mode.label();
+            let mut spans = if app.is_color256 {
+                let grad = [
+                    Color::Rgb(100, 149, 237),
+                    Color::Rgb(123, 137, 231),
+                    Color::Rgb(147, 125, 225),
+                    Color::Rgb(171, 113, 219),
+                    Color::Rgb(195, 101, 213),
+                    Color::Rgb(219, 89, 207),
+                    Color::Rgb(219, 112, 147),
+                ];
+                mode_label.chars().enumerate().map(|(i, c)| {
+                    Span::styled(c.to_string(), Style::default().fg(Color::White).bg(grad[i]))
+                }).collect::<Vec<_>>()
+            } else {
+                vec![Span::styled(mode_label, sp(5))]
+            };
+            spans.push(Span::styled(dirty, sp(5)));
+            spans.push(Span::styled(format!("  {}  {}{}", offset_str, pack_str, help_str), sp(5)));
             return f.render_widget(
-                Paragraph::new(Span::styled(s, sp(5))),
+                Paragraph::new(Line::from(spans)),
+                Rect::new(0, area.height - 1, area.width, 1),
+            );
+        }
+        InputMode::ModeSelect => {
+            return f.render_widget(
+                Paragraph::new(Span::styled("↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256", sp(5))),
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
@@ -1465,5 +1637,36 @@ fn draw_save_dialog(f: &mut ratatui::Frame, app: &App, area: Rect) {
             Span::styled(" No ", ns),
         ])),
         Rect::new(dx + 2, dy + 2, dw - 4, 1),
+    );
+}
+
+fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let modes = [
+        (DisplayMode::Ascii, "[ASCII]"),
+        (DisplayMode::Hex, "[HEX]  "),
+        (DisplayMode::Utf8, "[UTF8] "),
+    ];
+    let dw = 10u16;
+    let dh = 5u16;
+    let dy = area.height.saturating_sub(1) - dh;
+    let dx = 0u16;
+    let dialog = Rect::new(dx, dy, dw, dh);
+    f.render_widget(Clear, dialog);
+    for (i, (mode, label)) in modes.iter().enumerate() {
+        let sty = if app.mode == *mode { sp(16) } else { Style::default() };
+        f.render_widget(
+            Paragraph::new(Span::styled(format!(" {} ", label), sty)),
+            Rect::new(dx, dy + i as u16, dw, 1),
+        );
+    }
+    let checkbox = if app.is_color256 { " [x] 256 " } else { " [ ] 256 " };
+    let cb_style = if app.is_color256 {
+        Style::default().fg(Color::White).bg(Color::Rgb(147, 112, 219))
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(checkbox, cb_style)),
+        Rect::new(dx, dy + 3, dw, 1),
     );
 }
