@@ -1338,8 +1338,9 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
 
 /// 绘制帮助弹窗（自适应大小，带滚动条）
 fn draw_help(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let ver = env!("CARGO_PKG_VERSION");
     let lines_text = [
-        "=== HELP ===",
+        &*format!("=== read-bin v{} by Saisui ===", ver),
         "",
         "Navigation:",
         "  ↑↓ / jk    Scroll one line",
