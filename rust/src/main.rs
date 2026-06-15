@@ -138,15 +138,18 @@ fn main() -> io::Result<()> {
             let mut app = App::new(file_size, base_name);
             let reopen = run(&mut terminal, &mut app, &mut data, &filename);
 
-            disable_raw_mode()?;
-
             match reopen {
                 Ok(true) => {
                     // Ctrl+P: 清空文件名，下轮循环进入文件浏览器
+                    // 不调用 disable_raw_mode()，文件浏览器需要 raw mode
                     filename.clear();
                 }
-                Ok(false) => return Ok(()),
+                Ok(false) => {
+                    disable_raw_mode()?;
+                    return Ok(());
+                }
                 Err(e) => {
+                    disable_raw_mode()?;
                     eprintln!("Error: {}", e);
                     return Ok(());
                 }
@@ -464,7 +467,10 @@ fn handle_key_event(
                             }).collect()
                         }
                     };
-                    let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
+                    #[cfg(not(target_os = "android"))]
+                    { let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)); }
+                    #[cfg(target_os = "android")]
+                    { termux_clipboard_set(&text); }
                 }
                 return;
             }
@@ -1066,6 +1072,21 @@ fn handle_normal(
             }
         }
         _ => {}
+    }
+}
+
+/// Termux 剪贴板写入（通过 termux-clipboard-set 命令）
+#[cfg(target_os = "android")]
+fn termux_clipboard_set(text: &str) {
+    use std::io::Write;
+    if let Ok(mut child) = std::process::Command::new("termux-clipboard-set")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(ref mut stdin) = child.stdin {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
     }
 }
 
