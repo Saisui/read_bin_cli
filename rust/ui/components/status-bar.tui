@@ -1,7 +1,6 @@
 <template>
   <Statusbar>
     <Text class="mode">{{ mode_label }}</Text>
-    <Text class="dirty" v-if="{{ app.dirty }}"> [MODIFIED]</Text>
     <Text class="info">
       @{{ offset_hex }}  pack {{ pack_str }}  Ctrl+H:help
     </Text>
@@ -10,7 +9,6 @@
 
 <style>
   .mode { @apply hex; }
-  .dirty { @apply null; }
   .info { @apply ascii; }
 </style>
 

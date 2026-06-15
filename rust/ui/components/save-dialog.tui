@@ -1,29 +1,13 @@
 <template>
   <Popup class="save-dialog" title="Save">
     <Text class="message">Save changes before quitting?</Text>
-    <Row>
-      <Text class="btn-yes" v-if="{{ app.save_selected }}"> Yes </Text>
-      <Text class="btn-no" v-else> No </Text>
-    </Row>
   </Popup>
 </template>
 
 <style>
   .save-dialog { bg: [20, 20, 40]; border: gray; }
   .message { fg: white; }
-  .btn-yes { fg: black; bg: white; }
-  .btn-no { fg: white; }
 </style>
 
 <script lang="rust">
-  use crate::app::{App, InputMode};
-
-  fn on_key(app: &mut App, key: char) -> bool {
-      match key {
-          'y' | 'Y' => true,
-          'n' | 'N' | '\x1b' => false,
-          'h' | 'l' | '\t' => { app.save_selected = !app.save_selected; false },
-          _ => false,
-      }
-  }
 </script>
