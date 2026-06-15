@@ -1,0 +1,85 @@
+<template>
+  <View>
+    <Topbar class="topbar">
+      <Text class="file-info">{{ file_info }}</Text>
+    </Topbar>
+    <DataArea>
+      <Header class="header">
+        <Text class="offset">    </Text>
+        <Text class="col-0">0</Text>
+        <Text class="col-1">1</Text>
+        <Text class="col-2">2</Text>
+        <Text class="col-3">3</Text>
+        <Text class="col-4">4</Text>
+        <Text class="col-5">5</Text>
+        <Text class="col-6">6</Text>
+        <Text class="col-7">7</Text>
+        <Text class="col-8">8</Text>
+        <Text class="col-9">9</Text>
+        <Text class="col-a">a</Text>
+        <Text class="col-b">b</Text>
+        <Text class="col-c">c</Text>
+        <Text class="col-d">d</Text>
+        <Text class="col-e">e</Text>
+        <Text class="col-f">f</Text>
+      </Header>
+    </DataArea>
+  </View>
+</template>
+
+<style>
+  .topbar { bg: [30, 30, 50]; }
+  .file-info { @apply ascii; }
+  .header { fg: white; }
+  .col-0 { fg: [100, 149, 237]; }
+  .col-1 { fg: [108, 145, 232]; }
+  .col-2 { fg: [116, 141, 227]; }
+  .col-3 { fg: [124, 137, 222]; }
+  .col-4 { fg: [132, 133, 217]; }
+  .col-5 { fg: [140, 129, 212]; }
+  .col-6 { fg: [148, 125, 207]; }
+  .col-7 { fg: [156, 121, 202]; }
+  .col-8 { fg: [164, 117, 197]; }
+  .col-9 { fg: [172, 113, 192]; }
+  .col-a { fg: [180, 109, 187]; }
+  .col-b { fg: [188, 105, 182]; }
+  .col-c { fg: [196, 101, 177]; }
+  .col-d { fg: [204, 97, 172]; }
+  .col-e { fg: [212, 93, 167]; }
+  .col-f { fg: [219, 112, 147]; }
+  .line-num { fg: auto; }
+  .bytes { @apply ascii; }
+</style>
+
+<script lang="rust">
+  use crate::app::{App, DisplayMode};
+
+  fn file_info(app: &App) -> String {
+      format!("[{}] {}", App::format_size(app.file_size), app.filename)
+  }
+
+  fn line_num_color(row: u8) -> ratatui::style::Color {
+      let ratio = row as f64 / 255.0;
+      let (r, g, b) = if ratio < 0.5 {
+          let t = ratio * 2.0;
+          ((100.0 + 47.0 * t) as u8, (149.0 - 37.0 * t) as u8, (237.0 - 18.0 * t) as u8)
+      } else {
+          let t = (ratio - 0.5) * 2.0;
+          ((147.0 + 72.0 * t) as u8, 112u8, (219.0 - 72.0 * t) as u8)
+      };
+      ratatui::style::Color::Rgb(r, g, b)
+  }
+
+  fn byte_disp(b: u8, mode: DisplayMode) -> String {
+      match mode {
+          DisplayMode::Ascii => {
+              if b == 0 { ". ".into() }
+              else if b == 10 { "⏎ ".into() }
+              else if b == 0x20 { "· ".into() }
+              else if (0x21..=0x7e).contains(&b) { format!("{} ", b as char) }
+              else { format!("{:02x}", b) }
+          }
+          _ => format!("{:02x}", b),
+      }
+  }
+</script>

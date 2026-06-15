@@ -9,53 +9,31 @@
 </template>
 
 <style>
-  /* 模式标签 */
-  .mode {
-    fg: auto;
-    bg: green;
-  }
-
-  /* 修改标记 */
-  .dirty {
-    fg: red;
-    bold: true;
-  }
-
-  /* 信息文本 */
-  .info {
-    fg: auto;
-  }
-
-  /* 状态栏背景 */
-  .statusbar {
-    bg: [30, 30, 50];
-  }
+  .mode { @apply hex; }
+  .dirty { @apply null; }
+  .info { @apply ascii; }
 </style>
 
 <script lang="rust">
-  /// 模式标签文本
+  use crate::app::{App, InputMode};
+
   fn mode_label(app: &App) -> String {
       app.mode.label().to_string()
   }
 
-  /// 偏移地址（6位hex）
   fn offset_hex(app: &App) -> String {
       format!("{:06x}", app.cursor_byte)
   }
 
-  /// pack 信息
   fn pack_str(app: &App) -> String {
       format!("{:x}/{:x}", app.current_pack + 1, app.total_packs)
   }
 
-  /// 处理状态栏点击
-  fn on_click(app: &mut App, mx: u16, my: u16, area_w: u16) {
-      // 模式标签点击 → 打开模式选择
+  fn on_click(app: &mut App, mx: u16, _my: u16, _area_w: u16) {
       if mx < 7 {
           app.input_mode = InputMode::ModeSelect;
           return;
       }
-      // 计算各区域位置
       let dirty_len = if app.dirty { 11 } else { 0 };
       let hex_w = if app.file_size <= 0xff { 2 }
           else if app.file_size <= 0xffff { 4 }

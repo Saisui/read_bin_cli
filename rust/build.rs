@@ -26,6 +26,7 @@ pub struct Element {
 pub struct StyleRule {
     pub selector: String,
     pub properties: Vec<(String, String)>,
+    pub apply_ref: Option<String>,
 }
 
 /// 解析 .tui 文件内容
@@ -285,8 +286,16 @@ pub fn generate(tui: &TuiFile) -> String {
     code.push_str("    match class {\n");
     for rule in &tui.style_rules {
         let selector = rule.selector.trim_start_matches('.');
-        let style_expr = gen_style_expr(&rule.properties);
-        code.push_str(&format!("        \"{}\" => {},\n", selector, style_expr));
+        if let Some(ref apply_name) = rule.apply_ref {
+            // @apply xxx → 从 COLOR_CFG 查询对应样式
+            code.push_str(&format!(
+                "        \"{}\" => crate::COLOR_CFG.get().map(|c| c.sp_{}).unwrap_or_default(),\n",
+                selector, apply_name
+            ));
+        } else {
+            let style_expr = gen_style_expr(&rule.properties);
+            code.push_str(&format!("        \"{}\" => {},\n", selector, style_expr));
+        }
     }
     code.push_str("        _ => Style::default(),\n");
     code.push_str("    }\n}\n\n");
@@ -381,6 +390,7 @@ fn parse_style_content(body: &str) -> Vec<StyleRule> {
             let selector = line.split('{').next().unwrap_or("").trim().to_string();
             i += 1;
             let mut properties = Vec::new();
+            let mut apply_ref = None;
 
             while i < lines.len() {
                 let prop_line = lines[i].trim();
@@ -388,13 +398,20 @@ fn parse_style_content(body: &str) -> Vec<StyleRule> {
                     i += 1;
                     break;
                 }
+                // @apply xxx;
+                if prop_line.starts_with("@apply") {
+                    let val = prop_line.trim_start_matches("@apply").trim().trim_end_matches(';').trim().to_string();
+                    apply_ref = Some(val);
+                    i += 1;
+                    continue;
+                }
                 if let Some((key, val)) = prop_line.split_once(':') {
                     properties.push((key.trim().to_string(), val.trim().trim_end_matches(',').to_string()));
                 }
                 i += 1;
             }
 
-            rules.push(StyleRule { selector, properties });
+            rules.push(StyleRule { selector, properties, apply_ref });
             continue;
         }
 
@@ -406,35 +423,44 @@ fn parse_style_content(body: &str) -> Vec<StyleRule> {
 
 fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
+
+    // 递归扫描 ui/ 目录下的 .tui 文件
     let ui_dir = std::path::Path::new("ui");
-
-    if !ui_dir.exists() {
-        return;
-    }
-
-    let entries: Vec<_> = std::fs::read_dir(ui_dir)
-        .expect("Failed to read ui/ directory")
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "tui"))
-        .collect();
-
-    for entry in &entries {
-        let path = entry.path();
-        let stem = path.file_stem().unwrap().to_str().unwrap();
-        let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
-
-        let tui = parse(&content)
-            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path.display(), e));
-
-        let code = generate(&tui);
-
-        let out_path = std::path::Path::new(&out_dir).join(format!("{}.rs", stem));
-        std::fs::write(&out_path, &code)
-            .unwrap_or_else(|e| panic!("Failed to write {}: {}", out_path.display(), e));
-
-        println!("cargo:rerun-if-changed={}", path.display());
+    if ui_dir.exists() {
+        scan_tui_dir(ui_dir, &out_dir);
     }
 
     println!("cargo:rerun-if-changed=ui/");
+}
+
+/// 递归扫描目录下的 .tui 文件并生成 Rust 代码
+fn scan_tui_dir(dir: &std::path::Path, out_dir: &str) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).collect::<Vec<_>>(),
+        Err(_) => return,
+    };
+
+    for entry in &entries {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_tui_dir(&path, out_dir);
+            continue;
+        }
+        if path.extension().map_or(false, |ext| ext == "tui") {
+            let stem = path.file_stem().unwrap().to_str().unwrap();
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
+
+            let tui = parse(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path.display(), e));
+
+            let code = generate(&tui);
+
+            let out_path = std::path::Path::new(out_dir).join(format!("{}.rs", stem));
+            std::fs::write(&out_path, &code)
+                .unwrap_or_else(|e| panic!("Failed to write {}: {}", out_path.display(), e));
+
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
 }

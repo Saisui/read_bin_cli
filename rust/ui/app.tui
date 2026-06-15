@@ -1,0 +1,18 @@
+<template>
+  <App>
+    <TopBar />
+    <HexView />
+    <StatusBar />
+    <HelpPopup v-if="{{ app.input_mode == InputMode::Help }}" />
+    <SaveDialog v-if="{{ app.input_mode == InputMode::SaveConfirm }}" />
+    <ModeDropdown v-if="{{ app.input_mode == InputMode::ModeSelect }}" />
+  </App>
+</template>
+
+<style>
+  /* 主应用无额外样式，由子组件定义 */
+</style>
+
+<script lang="rust">
+  // 主应用布局，无额外逻辑
+</script>

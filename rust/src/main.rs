@@ -1111,8 +1111,14 @@ fn parse_hex_input(s: &str) -> Option<usize> {
 static COLOR_CFG: OnceLock<color_config::ColorConfig> = OnceLock::new();
 
 // 由 build.rs 从 ui/*.tui 自动生成
+mod app_tui {
+    include!(concat!(env!("OUT_DIR"), "/app.rs"));
+}
 mod statusbar_tui {
     include!(concat!(env!("OUT_DIR"), "/statusbar.rs"));
+}
+mod hex_view_tui {
+    include!(concat!(env!("OUT_DIR"), "/hex-view.rs"));
 }
 
 /// 初始化全局颜色配置
