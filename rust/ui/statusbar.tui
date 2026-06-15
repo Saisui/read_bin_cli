@@ -1,13 +1,84 @@
 <template>
   <Statusbar>
-    <Text class="mode">{{ app.mode.label() }}</Text>
-    <Text class="dirty" v-if="{{ dirty }}"> [MODIFIED]</Text>
-    <Text class="info">  @{{ format!("{:06x}", app.cursor_byte) }}  pack {{ format!("{:x}/{:x}", last_pack + 1, app.total_packs) }}  Ctrl+H:help</Text>
+    <Text class="mode">{{ mode_label }}</Text>
+    <Text class="dirty" v-if="{{ app.dirty }}"> [MODIFIED]</Text>
+    <Text class="info">
+      @{{ offset_hex }}  pack {{ pack_str }}  Ctrl+H:help
+    </Text>
   </Statusbar>
 </template>
 
 <style>
-  .mode   { fg: auto, bg: green }
-  .dirty  { fg: red }
-  .info   { fg: auto }
+  /* 模式标签 */
+  .mode {
+    fg: auto;
+    bg: green;
+  }
+
+  /* 修改标记 */
+  .dirty {
+    fg: red;
+    bold: true;
+  }
+
+  /* 信息文本 */
+  .info {
+    fg: auto;
+  }
+
+  /* 状态栏背景 */
+  .statusbar {
+    bg: [30, 30, 50];
+  }
 </style>
+
+<script lang="rust">
+  /// 模式标签文本
+  fn mode_label(app: &App) -> String {
+      app.mode.label().to_string()
+  }
+
+  /// 偏移地址（6位hex）
+  fn offset_hex(app: &App) -> String {
+      format!("{:06x}", app.cursor_byte)
+  }
+
+  /// pack 信息
+  fn pack_str(app: &App) -> String {
+      format!("{:x}/{:x}", app.current_pack + 1, app.total_packs)
+  }
+
+  /// 处理状态栏点击
+  fn on_click(app: &mut App, mx: u16, my: u16, area_w: u16) {
+      // 模式标签点击 → 打开模式选择
+      if mx < 7 {
+          app.input_mode = InputMode::ModeSelect;
+          return;
+      }
+      // 计算各区域位置
+      let dirty_len = if app.dirty { 11 } else { 0 };
+      let hex_w = if app.file_size <= 0xff { 2 }
+          else if app.file_size <= 0xffff { 4 }
+          else if app.file_size <= 0xffffff { 6 }
+          else { 8 };
+      let at_offset = (6 + dirty_len + 2) as u16;
+      let at_len = (1 + hex_w) as u16;
+      let pack_offset = at_offset + at_len + 2;
+      let pack_total_hex = format!("{:x}", app.total_packs).len();
+      let pack_len = (5 + hex_w + 1 + pack_total_hex) as u16;
+      let help_offset = pack_offset + pack_len + 2;
+
+      if mx >= at_offset && mx < at_offset + at_len {
+          app.input_mode = InputMode::GotoByteInput;
+          app.input_buf.clear();
+          app.input_prompt = "Go to byte (hex):".into();
+      } else if mx >= pack_offset && mx < pack_offset + pack_len {
+          app.input_mode = InputMode::GotoInput;
+          app.input_buf.clear();
+          app.input_prompt = "Go to pack (hex):".into();
+      } else if mx >= help_offset {
+          app.input_mode = InputMode::Help;
+          app.help_scroll = 0;
+      }
+  }
+</script>
