@@ -1,0 +1,32 @@
+<template>
+  <Popup class="file-browser" title="Open File">
+    <Text class="path">{{ current_path }}</Text>
+    <Scrollable scroll="{{ scroll_top }}">
+      {{ for entry in entries }}
+        <Text class="entry-dir" v-if="{{ entry.is_dir }}">{{ entry.name }}/</Text>
+        <Text class="entry-file" v-else>{{ entry.name }}</Text>
+      {{ /for }}
+    </Scrollable>
+    <Text class="hint">↑↓:nav Enter:open Backspace:up q:quit</Text>
+  </Popup>
+</template>
+
+<style>
+  .file-browser { bg: [20, 20, 40]; border: gray; }
+  .path { fg: cyan; }
+  .entry-dir { fg: blue; }
+  .entry-file { fg: white; }
+  .hint { fg: darkgray; }
+</style>
+
+<script lang="rust">
+  use crate::app::FileBrowser;
+
+  fn current_path(fb: &FileBrowser) -> String {
+      fb.current_dir.display().to_string()
+  }
+
+  fn entries(fb: &FileBrowser) -> Vec<String> {
+      fb.entries.iter().map(|e| e.name.clone()).collect()
+  }
+</script>

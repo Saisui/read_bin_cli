@@ -1,0 +1,25 @@
+<template>
+  <Popup class="help" title="Help">
+    <Scrollable scroll="{{ app.help_scroll }}">
+      {{ for line in visible_lines }}
+        <Text class="help-line">{{ line }}</Text>
+      {{ /for }}
+    </Scrollable>
+  </Popup>
+</template>
+
+<style>
+  .help { bg: [20, 20, 40]; border: gray; }
+  .help-line { fg: white; }
+</style>
+
+<script lang="rust">
+  use crate::app::App;
+
+  fn visible_lines(app: &App) -> Vec<&'static str> {
+      let lines = crate::HELP_LINES.lines().collect();
+      let max = 30;
+      let start = app.help_scroll.min(lines.len().saturating_sub(max));
+      lines[start..].to_vec()
+  }
+</script>

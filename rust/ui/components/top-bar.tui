@@ -1,0 +1,18 @@
+<template>
+  <Topbar class="topbar">
+    <Text class="file-info">{{ file_info }}</Text>
+  </Topbar>
+</template>
+
+<style>
+  .topbar { bg: [30, 30, 50]; }
+  .file-info { @apply ascii; }
+</style>
+
+<script lang="rust">
+  use crate::app::App;
+
+  fn file_info(app: &App) -> String {
+      format!("[{}] {}", App::format_size(app.file_size), app.filename)
+  }
+</script>

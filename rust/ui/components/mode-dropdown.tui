@@ -1,0 +1,24 @@
+<template>
+  <Dropdown class="mode-dropdown">
+    <Text class="mode-item" v-if="{{ app.mode == DisplayMode::Ascii }}">▶ [ASCII]</Text>
+    <Text class="mode-item" v-else>  [ASCII]</Text>
+    <Text class="mode-item" v-if="{{ app.mode == DisplayMode::Hex }}">▶ [HEX]</Text>
+    <Text class="mode-item" v-else>  [HEX]</Text>
+    <Text class="mode-item" v-if="{{ app.mode == DisplayMode::Utf8 }}">▶ [UTF8]</Text>
+    <Text class="mode-item" v-else>  [UTF8]</Text>
+    <Text class="mode-item">{{ checkbox_256 }}</Text>
+  </Dropdown>
+</template>
+
+<style>
+  .mode-dropdown { bg: [30, 30, 50]; }
+  .mode-item { fg: white; }
+</style>
+
+<script lang="rust">
+  use crate::app::{App, DisplayMode};
+
+  fn checkbox_256(app: &App) -> String {
+      if app.is_color256 { " [x] 256".into() } else { " [ ] 256".into() }
+  }
+</script>
