@@ -13,9 +13,6 @@
 /// - 样式选择器：`.class { fg: auto, bg: red }`, `.class:pseudo { ... }`
 /// - 事件绑定：`@click="handler"`, `@scroll="handler"`
 
-use proc_macro2::TokenStream;
-use quote::quote;
-
 // ─── Types ──────────────────────────────────────────────────
 
 pub struct TuiFile {
