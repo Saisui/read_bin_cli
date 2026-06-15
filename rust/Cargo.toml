@@ -8,13 +8,12 @@ edition = "2021"
 ratatui = "0.29"
 crossterm = "0.28"
 memmap2 = "0.9"
+read-bin-macros = { path = "macros" }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3"
 
 [profile.release]
 opt-level = "s"
-lto = true
 strip = true
 panic = "abort"
-codegen-units = 1

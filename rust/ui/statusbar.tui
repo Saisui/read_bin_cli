@@ -1,0 +1,13 @@
+<template>
+  <Statusbar>
+    <Text class="mode">{{ app.mode.label() }}</Text>
+    <Text class="dirty" v-if="{{ dirty }}"> [MODIFIED]</Text>
+    <Text class="info">  @{{ format!("{:06x}", app.cursor_byte) }}  pack {{ format!("{:x}/{:x}", last_pack + 1, app.total_packs) }}  Ctrl+H:help</Text>
+  </Statusbar>
+</template>
+
+<style>
+  .mode   { fg: auto, bg: green }
+  .dirty  { fg: red }
+  .info   { fg: auto }
+</style>

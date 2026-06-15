@@ -1110,6 +1110,11 @@ fn parse_hex_input(s: &str) -> Option<usize> {
 // ─── 渲染 ──────────────────────────────────────────────────
 static COLOR_CFG: OnceLock<color_config::ColorConfig> = OnceLock::new();
 
+/// 测试 include_tui! 宏生成的样式查询函数
+mod statusbar_tui {
+    read_bin_macros::include_tui!("ui/statusbar.tui");
+}
+
 /// 初始化全局颜色配置
 pub fn init_colors(path: &std::path::Path) -> Result<(), String> {
     let cfg = color_config::ColorConfig::load(path)?;
