@@ -242,7 +242,7 @@ fn handle_mouse_event(
                 }
             } else if app.input_mode == InputMode::ModeSelect {
                 // 模式下拉菜单点击
-                let dh = 5u16;
+                let dh = 6u16;
                 let dy = area_h.saturating_sub(1) - dh;
                 let dw = 10u16;
                 if mx < dw && my >= dy && my < dy + dh {
@@ -252,6 +252,7 @@ fn handle_mouse_event(
                         1 => app.mode = DisplayMode::Hex,
                         2 => app.mode = DisplayMode::Utf8,
                         3 => app.is_color256 = !app.is_color256,
+                        4 => app.is_rgb_bg = !app.is_rgb_bg,
                         _ => {}
                     }
                     if sel <= 2 {
@@ -562,7 +563,8 @@ fn handle_key_event(
             KeyCode::Char('1') => { app.mode = DisplayMode::Ascii; app.input_mode = InputMode::Normal; }
             KeyCode::Char('2') => { app.mode = DisplayMode::Hex; app.input_mode = InputMode::Normal; }
             KeyCode::Char('3') => { app.mode = DisplayMode::Utf8; app.input_mode = InputMode::Normal; }
-            KeyCode::Char('4') | KeyCode::Char('n') => { app.is_color256 = !app.is_color256; }
+            KeyCode::Char('4') => { app.is_color256 = !app.is_color256; }
+            KeyCode::Char('5') => { app.is_rgb_bg = !app.is_rgb_bg; }
             _ => {}
         }
         InputMode::FileBrowser => {
@@ -916,7 +918,16 @@ fn handle_normal(
         }
         KeyCode::Char('?') => { app.input_mode = InputMode::Help; app.help_scroll = 0; }
         KeyCode::Char('m') => app.mode = app.mode.next(),
-        KeyCode::Char('n') => app.is_color256 = !app.is_color256,
+        KeyCode::Char('n') => {
+            if app.is_color256 {
+                app.is_color256 = false;
+                app.is_rgb_bg = true;
+            } else if app.is_rgb_bg {
+                app.is_rgb_bg = false;
+            } else {
+                app.is_color256 = true;
+            }
+        }
         KeyCode::Char('i') => {
             app.input_mode = InputMode::Edit;
             if app.cursor_byte == 0 && !app.dirty {
@@ -1294,6 +1305,18 @@ fn dim_bg_10pct(s: Style) -> Style {
     COLOR_CFG.get().map(|c| c.dim_bg(s)).unwrap_or(s)
 }
 
+/// RGB 背景色：R=prev, G=self, B=next
+///
+/// 边界处理：无 prev 取 off+16，无 next 取 off-16。
+fn rgb_bg(data: &[u8], off: usize, file_size: usize) -> Color {
+    let r = if off > 0 { data[off - 1] }
+            else { data.get(off + 16).copied().unwrap_or(0) };
+    let g = data[off];
+    let b = if off + 1 < file_size { data[off + 1] }
+            else { data.get(off + 16).copied().unwrap_or(0) };
+    Color::Rgb(r, g, b)
+}
+
 const STD_COLORS: [(u8,u8,u8); 8] = [
     (0,0,0), (170,0,0), (0,170,0), (170,85,0),
     (0,0,170), (170,0,170), (0,170,170), (170,170,170),
@@ -1379,11 +1402,13 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
 /// 绘制主视图（hex/ascii/utf8 内容区）
 /// 绘制顶栏（文件名 + 大小）和主视图
 fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
-    // 顶栏：文件大小 + 文件名
+    // 顶栏：文件大小 + 文件名（背景色延伸到行尾）
     let size_str = App::format_size(app.file_size);
     let top_bar = format!("[{}] {}", size_str.replace(' ', "_"), app.filename);
+    let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
+    let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
     f.render_widget(
-        Paragraph::new(Span::styled(top_bar, Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60)))),
+        Paragraph::new(Span::styled(top_bar_full, Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60)))),
         Rect::new(0, 0, area.width, 1),
     );
     // 数据区从第 2 行开始（第 0 行顶栏，第 1 行列号头在 build_lines 中）
@@ -1442,7 +1467,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
             let t = (ratio - 0.5) * 2.0;
             (
                 (147.0 + (219.0 - 147.0) * t) as u8,
-                (112.0 + (112.0 - 112.0) * t) as u8,
+                112.0 as u8,
                 (219.0 + (147.0 - 219.0) * t) as u8,
             )
         };
@@ -1457,7 +1482,11 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 let p = off - cross_row_tail + t;
                 let go = base_off + p;
                 let tail_b = data[p];
-                let ts = if app.is_color256 {
+                let ts = if app.is_rgb_bg {
+                    let bg = rgb_bg(data_full, go, app.file_size);
+                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    resolve(app, go, Style::default().bg(bg).fg(fg), mr)
+                } else if app.is_color256 {
                     let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
                     resolve(app, go, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
                 } else {
@@ -1497,7 +1526,11 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             prev_type = cur_type;
                         }
                         let dim = same_count % 2 == 1;
-                        let base = if app.is_color256 {
+                        let base = if app.is_rgb_bg {
+                            let bg = rgb_bg(data_full, go, app.file_size);
+                            let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                            Style::default().bg(bg).fg(fg)
+                        } else if app.is_color256 {
                             let fg = if indexed_luminance(*ch as u8) > 128.0 { Color::Black } else { Color::White };
                             Style::default().bg(Color::Indexed(*ch as u8)).fg(fg)
                         } else if (*ch as u32) < 0x20 {
@@ -1515,7 +1548,11 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             }
                             let cgo = base_off + off + pos + ci;
                             let tail_b = data[off + pos + ci];
-                            let ts = if app.is_color256 {
+                            let ts = if app.is_rgb_bg {
+                                let bg = rgb_bg(data_full, cgo, app.file_size);
+                                let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                                resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
+                            } else if app.is_color256 {
                                 let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
                                 resolve(app, cgo, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
                             } else {
@@ -1528,7 +1565,11 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let bo = off + pos;
                         let go = base_off + bo;
                         let b = data[bo];
-                        let base = if app.is_color256 {
+                        let base = if app.is_rgb_bg {
+                            let bg = rgb_bg(data_full, go, app.file_size);
+                            let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                            Style::default().bg(bg).fg(fg)
+                        } else if app.is_color256 {
                             let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
                             Style::default().bg(Color::Indexed(b)).fg(fg)
                         } else {
@@ -1559,7 +1600,11 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 let dim = same_count % 2 == 1;
                 if app.input_mode == InputMode::Edit && app.cursor_byte == go {
                     let d = byte_disp(b, app.mode);
-                    let non_cursor_style = if app.is_color256 {
+                    let non_cursor_style = if app.is_rgb_bg {
+                        let bg = rgb_bg(data_full, go, app.file_size);
+                        let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                        Style::default().bg(bg).fg(fg)
+                    } else if app.is_color256 {
                         let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
                         Style::default().bg(Color::Indexed(b)).fg(fg)
                     } else {
@@ -1582,14 +1627,18 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     }
                     continue;
                 }
-                let base = if app.is_color256 {
+                let base = if app.is_rgb_bg {
+                    let bg = rgb_bg(data_full, go, app.file_size);
+                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    Style::default().bg(bg).fg(fg)
+                } else if app.is_color256 {
                     let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
                     Style::default().bg(Color::Indexed(b)).fg(fg)
                 } else {
                     byte_style(b, app.mode)
                 };
                 let sty = resolve(app, go, base, mr);
-                let final_sty = if app.is_color256 { sty } else if dim { dim_bg_10pct(sty) } else { sty };
+                let final_sty = if app.is_color256 || app.is_rgb_bg { sty } else if dim { dim_bg_10pct(sty) } else { sty };
                 spans.push(Span::styled(byte_disp(b, app.mode), final_sty));
             }
         }
@@ -1673,7 +1722,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             let help_str = "  Ctrl+H:help";
 
             let mode_label = app.mode.label();
-            let mut spans = if app.is_color256 {
+            let mut spans = if app.is_color256 || app.is_rgb_bg {
                 let grad = [
                     Color::Rgb(100, 149, 237),
                     Color::Rgb(123, 137, 231),
@@ -1698,7 +1747,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
         }
         InputMode::ModeSelect => {
             return f.render_widget(
-                Paragraph::new(Span::styled("↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256", sp(5))),
+                Paragraph::new(Span::styled("↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB", sp(5))),
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
@@ -1823,7 +1872,7 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         (DisplayMode::Utf8, "[UTF8] "),
     ];
     let dw = 10u16;
-    let dh = 5u16;
+    let dh = 6u16;
     let dy = area.height.saturating_sub(1) - dh;
     let dx = 0u16;
     let dialog = Rect::new(dx, dy, dw, dh);
@@ -1844,6 +1893,16 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(checkbox, cb_style)),
         Rect::new(dx, dy + 3, dw, 1),
+    );
+    let rgb_checkbox = if app.is_rgb_bg { " [x] RGB " } else { " [ ] RGB " };
+    let rgb_style = if app.is_rgb_bg {
+        Style::default().fg(Color::White).bg(Color::Rgb(147, 112, 219))
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(rgb_checkbox, rgb_style)),
+        Rect::new(dx, dy + 4, dw, 1),
     );
 }
 
