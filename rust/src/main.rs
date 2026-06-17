@@ -2919,20 +2919,20 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
                 // 选中：整行用该模式的背景色
                 let pad = " ".repeat(dw.saturating_sub(label.len() as u16 + 4) as usize);
                 Line::from(Span::styled(
-                    format!("   {}{} ", label, pad),
+                    format!("  {}{} ", label, pad),
                     Style::default().bg(*bg_color).fg(fg),
                 ))
             } else {
                 // 未选中：纯文本，无背景色，右移
-                Line::from(Span::raw(format!("   {} ", label)))
+                Line::from(Span::raw(format!("  {} ", label)))
             }
         } else {
             // off 选项（无背景色）
             if *sel {
                 let pad = " ".repeat(dw.saturating_sub(label.len() as u16 + 4) as usize);
-                Line::from(Span::styled(format!("   {}{} ", label, pad), sp(16)))
+                Line::from(Span::styled(format!("  {}{} ", label, pad), sp(16)))
             } else {
-                Line::from(Span::raw(format!("   {} ", label)))
+                Line::from(Span::raw(format!("  {} ", label)))
             }
         };
         f.render_widget(Paragraph::new(line), row_rect);
