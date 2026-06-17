@@ -287,9 +287,10 @@ fn handle_mouse_event(
                     if off < app.file_size {
                         app.cursor_byte = off;
                         app.cursor_focused = true;
-                        app.sel_start = Some(off);
-                        app.sel_end = Some(off);
+                        // 点击只移动光标，拖拽才开始选区（避免闪烁）
                         app.dragging = true;
+                        app.sel_start = None;
+                        app.sel_end = None;
                         app.ensure_cursor_visible(area_h);
                     }
                 }
@@ -356,6 +357,10 @@ fn handle_mouse_event(
                         let off = global_row * 16 + bc;
                         if off < app.file_size {
                             app.cursor_byte = off;
+                            // 第一次拖拽时设置 sel_start（点击时未设）
+                            if app.sel_start.is_none() {
+                                app.sel_start = Some(off);
+                            }
                             app.sel_end = Some(off);
                             app.ensure_cursor_visible(area_h);
                         }
@@ -558,6 +563,25 @@ fn handle_key_event(
             }
             KeyCode::Char('m') => {
                 app.mode = app.mode.next();
+                return;
+            }
+            // Alt+↑/↓：字节值 ±1（编辑模式微调）
+            KeyCode::Up => {
+                if app.input_mode == InputMode::Edit && app.cursor_byte < app.file_size {
+                    let val = data[app.cursor_byte];
+                    if val < 0xFF {
+                        app.modify(data, app.cursor_byte, val + 1);
+                    }
+                }
+                return;
+            }
+            KeyCode::Down => {
+                if app.input_mode == InputMode::Edit && app.cursor_byte < app.file_size {
+                    let val = data[app.cursor_byte];
+                    if val > 0x00 {
+                        app.modify(data, app.cursor_byte, val - 1);
+                    }
+                }
                 return;
             }
             _ => {}
@@ -832,6 +856,9 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
 }
 
 /// 编辑模式输入处理：光标移动 + 字节编辑
+///
+/// 所有光标移动后调用 ensure_cursor_visible 防止越界。
+/// 额外 clamp 确保 cursor_byte 在文件范围内。
 fn handle_edit(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
     match code {
         KeyCode::Esc => {
@@ -945,6 +972,10 @@ fn handle_edit(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
             app.ensure_cursor_visible(th);
         }
         _ => {}
+    }
+    // 防止 cursor_byte 越界（边界情况）
+    if app.file_size > 0 {
+        app.cursor_byte = app.cursor_byte.min(app.file_size - 1);
     }
 }
 
@@ -1424,20 +1455,26 @@ fn utf8_char_style(ch: char) -> Style {
     base
 }
 
-/// 将颜色亮度降至 50%（用于编辑模式背景压暗）
+/// 将颜色亮度降至 20%（用于编辑模式背景压暗）
 fn dim_color(c: Color) -> Color {
     let (r, g, b) = color_config::color_rgb(c);
     Color::Rgb(
-        (r as u16 * 50 / 100) as u8,
-        (g as u16 * 50 / 100) as u8,
-        (b as u16 * 50 / 100) as u8,
+        (r as u16 * 20 / 100) as u8,
+        (g as u16 * 20 / 100) as u8,
+        (b as u16 * 20 / 100) as u8,
     )
 }
 
-/// 压暗样式背景色 50%（编辑模式下非光标字节使用）
+/// 压暗样式背景色至 10%，前景色根据压暗后背景亮度自动选择黑/白
 fn dim_style(s: Style) -> Style {
     let bg = s.bg.unwrap_or(Color::Rgb(30, 30, 30));
-    s.bg(dim_color(bg))
+    let dimmed = dim_color(bg);
+    let fg = if color_config::luminance(dimmed) > 128.0 {
+        Color::Black
+    } else {
+        Color::White
+    };
+    s.bg(dimmed).fg(fg)
 }
 
 /// 按 ColorConfig 配置压暗背景色（交替 dim 效果）
@@ -1667,7 +1704,8 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
     lines.push(Line::from(hspans));
 
     let global_total = app.global_total_rows();
-    let max_rows = app.max_rows(area.height);
+    // data_area 从第 1 行开始（顶栏在外部），减 1 行列号头 = 数据行数
+    let max_rows = (area.height as usize).saturating_sub(1);
     let global_start = app.global_scroll_top();
     let global_end = (global_start + max_rows).min(global_total);
     let mr = app.current_match_range();
@@ -1998,21 +2036,36 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
     f.render_widget(Clear, Rect::new(0, area.height - 1, area.width, 1));
     let text = match app.input_mode {
         InputMode::Edit => {
-            let byte_info = if app.mode != DisplayMode::Hex && app.cursor_byte < app.file_size {
+            // 编辑模式状态栏：模式 + 字节值 + 地址 + 页码
+            let byte_info = if app.cursor_byte < app.file_size {
                 format!(" [{:02X}]", data[app.cursor_byte])
             } else {
                 String::new()
             };
+            let hex_w = if app.file_size <= 0xff {
+                2
+            } else if app.file_size <= 0xffff {
+                4
+            } else if app.file_size <= 0xffffff {
+                6
+            } else {
+                8
+            };
+            let offset_str = format!("&{:0width$x}", app.cursor_byte, width = hex_w);
+            let cur_pack = app.cursor_byte / app.pack_size + 1;
+            let pack_str = format!("@{:x}/{:x}", cur_pack, app.total_packs);
             return f.render_widget(
-                Paragraph::new(Span::raw(format!(
-                    "{}{}",
-                    match app.mode {
-                        DisplayMode::Ascii => "[EDIT ASCII]",
-                        DisplayMode::Utf8 => "[EDIT UTF8]",
-                        DisplayMode::Hex => "[EDIT HEX]",
-                    },
-                    byte_info
-                ))),
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        match app.mode {
+                            DisplayMode::Ascii => "[EDIT ASCII]",
+                            DisplayMode::Utf8 => "[EDIT UTF8]",
+                            DisplayMode::Hex => "[EDIT HEX]",
+                        },
+                        sp(16),
+                    ),
+                    Span::raw(format!("{}  {}  {}", byte_info, offset_str, pack_str)),
+                ])),
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
