@@ -2009,8 +2009,8 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                         disp.push_str("...");
                     }
                     let status = format!(
-                        "Search: {} @{:x}/{:x} [{}{}]  ↑↓:next ESC:clear",
-                        disp, cur_pack, app.total_packs, total, plus
+                        "Search: {} [{}{}] @{:x}/{:x}  ↑↓:next ESC:clear",
+                        disp, total, plus, cur_pack, app.total_packs
                     );
                     return f.render_widget(
                         Paragraph::new(Span::styled(status, sp(5))),
