@@ -118,6 +118,9 @@ fn main() -> io::Result<()> {
         .map_err(|e| io::Error::new(e.kind(), format!("Terminal::new: {}", e)))?;
 
     let exit_code = (|| -> io::Result<()> {
+        // 跟踪模式：跨 reload 保存 overlay
+        let mut saved_overlay: Option<std::collections::HashMap<usize, u8>> = None;
+        let mut saved_orig: Option<std::collections::HashMap<usize, u8>> = None;
         loop {
             // 如果没有文件，进入文件浏览器
             if filename.is_empty() {
@@ -221,6 +224,16 @@ fn main() -> io::Result<()> {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| filename.clone());
             let mut app = App::new(file_size, base_name);
+            // 跟踪模式：继承上一次 reload 的 overlay（用户编辑优先于外部修改）
+            if let Some(ov) = saved_overlay.take() {
+                app.overlay = ov;
+                app.original_values = saved_orig.take().unwrap_or_default();
+                app.dirty = !app.overlay.is_empty();
+                // 重建 modified 位图
+                for &off in app.overlay.keys() {
+                    app.modified.mark(off);
+                }
+            }
             let reopen = run(
                 &mut terminal,
                 &mut app,
@@ -238,7 +251,9 @@ fn main() -> io::Result<()> {
                         filename = path.clone();
                         app.pending_file = None;
                     } else if track {
-                        // 跟踪模式：文件变化，重新 mmap（filename 不变）
+                        // 跟踪模式：文件变化，保存 overlay 以便新 App 继承
+                        saved_overlay = Some(app.overlay.clone());
+                        saved_orig = Some(app.original_values.clone());
                     } else {
                         // 文件浏览器
                         filename.clear();
