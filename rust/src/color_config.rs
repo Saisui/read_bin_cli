@@ -39,7 +39,9 @@ pub fn init_terminal_palette(home_dir: &std::path::Path) {
             let line = line.trim();
             if let Some((key, val)) = line.split_once('=') {
                 let val = val.trim().trim_start_matches('#');
-                if let Some(idx) = key.trim().strip_prefix("color")
+                if let Some(idx) = key
+                    .trim()
+                    .strip_prefix("color")
                     .and_then(|s| s.trim().parse::<usize>().ok())
                 {
                     if let Some(rgb) = parse_hex3(val) {
@@ -60,7 +62,9 @@ fn parse_hex3(s: &str) -> Option<[u8; 3]> {
             u8::from_str_radix(&s[2..4], 16).ok()?,
             u8::from_str_radix(&s[4..6], 16).ok()?,
         ])
-    } else { None }
+    } else {
+        None
+    }
 }
 
 /// 将 ratatui Color 解析为实际 RGB 值
@@ -68,7 +72,9 @@ fn parse_hex3(s: &str) -> Option<[u8; 3]> {
 /// 优先返回 Rgb 变体的直接值。
 /// 对命名色（Black/Red/...），优先查终端调色板，无则用 XTerm 默认值。
 pub fn color_rgb(c: Color) -> (u8, u8, u8) {
-    if let Color::Rgb(r, g, b) = c { return (r, g, b); }
+    if let Color::Rgb(r, g, b) = c {
+        return (r, g, b);
+    }
     let idx = match c {
         Color::Black => 0,
         Color::Red => 1,
@@ -82,7 +88,9 @@ pub fn color_rgb(c: Color) -> (u8, u8, u8) {
         _ => return (128, 128, 128),
     };
     if let Some(pal) = TERM_PALETTE.get() {
-        if let Some(&[r, g, b]) = pal.get(&idx) { return (r, g, b); }
+        if let Some(&[r, g, b]) = pal.get(&idx) {
+            return (r, g, b);
+        }
     }
     // fallback XTerm-like
     match idx {
@@ -134,7 +142,10 @@ fn yaml_parse_style(block: &str, key: &str) -> Option<Style> {
             continue;
         }
         // skip key + ":"
-        let after = rest.trim_start_matches(key).trim_start().strip_prefix(':')?;
+        let after = rest
+            .trim_start_matches(key)
+            .trim_start()
+            .strip_prefix(':')?;
         let val = after.trim_start();
         return parse_style_val(val);
     }
@@ -145,7 +156,9 @@ fn yaml_parse_style(block: &str, key: &str) -> Option<Style> {
 /// 处理 `fg: auto`：有 bg 时存哨兵 AUTO_FG_SENTINEL，无 bg 时 fg 保持 null。
 fn parse_style_val(val: &str) -> Option<Style> {
     let val = val.trim();
-    if val == "{}" { return Some(Style::default()); }
+    if val == "{}" {
+        return Some(Style::default());
+    }
     // find matching closing brace
     let brace_start = val.find('{')?;
     let mut depth = 0u8;
@@ -153,7 +166,13 @@ fn parse_style_val(val: &str) -> Option<Style> {
     for (i, ch) in val[brace_start..].char_indices() {
         match ch {
             '{' => depth += 1,
-            '}' => { depth -= 1; if depth == 0 { brace_end = brace_start + i; break; } }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    brace_end = brace_start + i;
+                    break;
+                }
+            }
             _ => {}
         }
     }
@@ -225,7 +244,9 @@ fn parse_rgb(v: &str) -> Option<Color> {
     let inner = v.strip_prefix('[')?.strip_suffix(']')?;
     let mut nums = [0u8; 3];
     for (i, p) in inner.split(',').enumerate() {
-        if i >= 3 { return None; }
+        if i >= 3 {
+            return None;
+        }
         nums[i] = p.trim().parse().ok()?;
     }
     Some(Color::Rgb(nums[0], nums[1], nums[2]))
@@ -246,7 +267,10 @@ fn yaml_parse_dim(yaml: &str) -> (f64, HashMap<Rgb, f64>) {
         .unwrap_or(0.8);
 
     let mut overrides = HashMap::new();
-    let over_block = dim_block.find("overrides:").map(|i| &dim_block[i..]).unwrap_or("");
+    let over_block = dim_block
+        .find("overrides:")
+        .map(|i| &dim_block[i..])
+        .unwrap_or("");
     for line in over_block.lines().skip(1) {
         let line = line.trim();
         if let Some((k, v)) = line.split_once(':') {
@@ -306,15 +330,15 @@ impl ColorConfig {
         let (dim_global, dim_overrides) = yaml_parse_dim(yaml);
 
         Ok(ColorConfig {
-            sp_null:    yaml_parse_style(yaml, "null").unwrap_or(d),
+            sp_null: yaml_parse_style(yaml, "null").unwrap_or(d),
             sp_control: yaml_parse_style(yaml, "control").unwrap_or(d),
-            sp_blank:   yaml_parse_style(yaml, "blank").unwrap_or(d),
-            sp_ascii:   yaml_parse_style(yaml, "ascii").unwrap_or(d),
-            sp_hex:     yaml_parse_style(yaml, "hex").unwrap_or(d),
-            sp_head2:   yaml_parse_style(yaml, "head2").unwrap_or_default(),
-            sp_head3:   yaml_parse_style(yaml, "head3").unwrap_or_default(),
-            sp_head4:   yaml_parse_style(yaml, "head4").unwrap_or_default(),
-            sp_tail:    yaml_parse_style(yaml, "tail").unwrap_or_default(),
+            sp_blank: yaml_parse_style(yaml, "blank").unwrap_or(d),
+            sp_ascii: yaml_parse_style(yaml, "ascii").unwrap_or(d),
+            sp_hex: yaml_parse_style(yaml, "hex").unwrap_or(d),
+            sp_head2: yaml_parse_style(yaml, "head2").unwrap_or_default(),
+            sp_head3: yaml_parse_style(yaml, "head3").unwrap_or_default(),
+            sp_head4: yaml_parse_style(yaml, "head4").unwrap_or_default(),
+            sp_tail: yaml_parse_style(yaml, "tail").unwrap_or_default(),
             sp_unknown: yaml_parse_style(yaml, "unknown").unwrap_or_default(),
             sp_cursor: yaml_parse_style(yaml, "cursor").unwrap_or_default(),
             sp_found: yaml_parse_style(yaml, "found").unwrap_or_default(),
@@ -332,7 +356,11 @@ impl ColorConfig {
     pub fn dim_bg(&self, s: Style) -> Style {
         if let Some(bg) = s.bg {
             let mult = match bg {
-                Color::Rgb(r, g, b) => self.dim_overrides.get(&[r, g, b]).copied().unwrap_or(self.dim_global),
+                Color::Rgb(r, g, b) => self
+                    .dim_overrides
+                    .get(&[r, g, b])
+                    .copied()
+                    .unwrap_or(self.dim_global),
                 _ => self.dim_global,
             };
             let (num, den) = ((mult * 100.0) as u16, 100);

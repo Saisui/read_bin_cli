@@ -5,10 +5,12 @@
 ///
 /// 模块结构：
 /// - app: 应用状态管理
+/// - bitmap: 四级位图搜索引擎（804 字节固定内存）
 /// - color_config: 颜色配置加载
-/// - search: 搜索引擎（三级位图索引）
+/// - search: 搜索模式解析（hex/nibble/字符串）
 /// - utf8: UTF-8 解码与分类
 mod app;
+mod bitmap;
 mod color_config;
 mod search;
 mod utf8;
@@ -20,8 +22,8 @@ use std::sync::OnceLock;
 
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
-        MouseButton, MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+        MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -55,11 +57,13 @@ fn main() -> io::Result<()> {
     };
 
     // 终端只创建一次
-    enable_raw_mode()
-        .map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
+    enable_raw_mode().map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).map_err(|e| {
-        io::Error::new(e.kind(), format!("EnterAlternateScreen/EnableMouseCapture: {}", e))
+        io::Error::new(
+            e.kind(),
+            format!("EnterAlternateScreen/EnableMouseCapture: {}", e),
+        )
     })?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)
@@ -110,7 +114,14 @@ fn main() -> io::Result<()> {
                     for i in 0..16 {
                         if off + i < data.len() {
                             let b = data[off + i];
-                            print!("{}", if (0x20..=0x7e).contains(&b) { b as char } else { '.' });
+                            print!(
+                                "{}",
+                                if (0x20..=0x7e).contains(&b) {
+                                    b as char
+                                } else {
+                                    '.'
+                                }
+                            );
                         }
                     }
                     println!("|");
@@ -123,9 +134,9 @@ fn main() -> io::Result<()> {
 
             // 首次加载颜色配置，后续调用忽略（OnceLock 已设置）
             let _ = init_colors(std::path::Path::new("color.yaml"));
-            color_config::init_terminal_palette(
-                &std::path::Path::new(&std::env::var("HOME").unwrap_or_default()),
-            );
+            color_config::init_terminal_palette(&std::path::Path::new(
+                &std::env::var("HOME").unwrap_or_default(),
+            ));
 
             enable_raw_mode()
                 .map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
@@ -290,10 +301,15 @@ fn handle_mouse_event(
             // 状态栏点击
             if my == area_h.saturating_sub(1) && app.input_mode == InputMode::Normal {
                 let dirty_len = if app.dirty { 11 } else { 0 };
-                let hex_w = if app.file_size <= 0xff { 2 }
-                    else if app.file_size <= 0xffff { 4 }
-                    else if app.file_size <= 0xffffff { 6 }
-                    else { 8 };
+                let hex_w = if app.file_size <= 0xff {
+                    2
+                } else if app.file_size <= 0xffff {
+                    4
+                } else if app.file_size <= 0xffffff {
+                    6
+                } else {
+                    8
+                };
                 let at_offset = (6 + dirty_len + 2) as u16;
                 let at_len = (1 + hex_w) as u16;
                 let pack_offset = at_offset + at_len + 2;
@@ -325,8 +341,8 @@ fn handle_mouse_event(
                     let total = 2 + HELP_LINES.lines().count();
                     let max_scroll = total.saturating_sub(inner_h);
                     if max_scroll > 0 && inner_h > 0 && mx == sb_x {
-                        let drag_ratio = (my as isize - hy as isize - 1).max(0) as f64
-                            / (inner_h - 1) as f64;
+                        let drag_ratio =
+                            (my as isize - hy as isize - 1).max(0) as f64 / (inner_h - 1) as f64;
                         app.help_scroll = (drag_ratio * max_scroll as f64).round() as usize;
                     }
                 }
@@ -341,7 +357,7 @@ fn handle_mouse_event(
                         if off < app.file_size {
                             app.cursor_byte = off;
                             app.sel_end = Some(off);
-app.ensure_cursor_visible(area_h);
+                            app.ensure_cursor_visible(area_h);
                         }
                     }
                 }
@@ -438,41 +454,62 @@ fn handle_key_event(
             }
             KeyCode::Char('c') => {
                 if let (Some(start), Some(end)) = (app.sel_start, app.sel_end) {
-                    let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+                    let (lo, hi) = if start <= end {
+                        (start, end)
+                    } else {
+                        (end, start)
+                    };
                     let len = (hi - lo + 1).min(data.len() - lo);
                     let selected = &data[lo..lo + len];
                     let text = match app.mode {
-                        DisplayMode::Ascii => {
-                            selected.iter().map(|b| {
-                                if *b == 0 { '.' }
-                                else if *b == 0x0d { 'r' }
-                                else if *b == 10 { '\n' }
-                                else if *b == 0x1b { 'e' }
-                                else if (0x01..=0x1f).contains(b) { '.' }
-                                else if *b == 0x20 { ' ' }
-                                else if (0x21..=0x7e).contains(b) { *b as char }
-                                else { '.' }
-                            }).collect()
-                        }
-                        DisplayMode::Hex => {
-                            selected.iter().map(|b| format!("{:02x}", b))
-                                .collect::<Vec<_>>().join(" ")
-                        }
+                        DisplayMode::Ascii => selected
+                            .iter()
+                            .map(|b| {
+                                if *b == 0 {
+                                    '.'
+                                } else if *b == 0x0d {
+                                    'r'
+                                } else if *b == 10 {
+                                    '\n'
+                                } else if *b == 0x1b {
+                                    'e'
+                                } else if (0x01..=0x1f).contains(b) {
+                                    '.'
+                                } else if *b == 0x20 {
+                                    ' '
+                                } else if (0x21..=0x7e).contains(b) {
+                                    *b as char
+                                } else {
+                                    '.'
+                                }
+                            })
+                            .collect(),
+                        DisplayMode::Hex => selected
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" "),
                         DisplayMode::Utf8 => {
                             let segs = crate::utf8::decode_row(data, lo, len, 0);
-                            segs.iter().filter_map(|seg| {
-                                if let crate::utf8::Segment::Char { ch, .. } = seg {
-                                    Some(*ch)
-                                } else {
-                                    None
-                                }
-                            }).collect()
+                            segs.iter()
+                                .filter_map(|seg| {
+                                    if let crate::utf8::Segment::Char { ch, .. } = seg {
+                                        Some(*ch)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect()
                         }
                     };
                     #[cfg(not(target_os = "android"))]
-                    { let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)); }
+                    {
+                        let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
+                    }
                     #[cfg(target_os = "android")]
-                    { termux_clipboard_set(&text); }
+                    {
+                        termux_clipboard_set(&text);
+                    }
                 }
                 return;
             }
@@ -547,7 +584,7 @@ fn handle_key_event(
                 app.help_scroll += 10;
             }
             _ => {}
-        }
+        },
         InputMode::ModeSelect => match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 app.input_mode = InputMode::Normal;
@@ -561,14 +598,29 @@ fn handle_key_event(
             KeyCode::Enter | KeyCode::Char(' ') => {
                 app.input_mode = InputMode::Normal;
             }
-            KeyCode::Char('1') => { app.mode = DisplayMode::Ascii; app.input_mode = InputMode::Normal; }
-            KeyCode::Char('2') => { app.mode = DisplayMode::Hex; app.input_mode = InputMode::Normal; }
-            KeyCode::Char('3') => { app.mode = DisplayMode::Utf8; app.input_mode = InputMode::Normal; }
-            KeyCode::Char('4') => { app.is_color256 = !app.is_color256; }
-            KeyCode::Char('5') => { app.is_rgb_bg = !app.is_rgb_bg; }
-            KeyCode::Char('6') => { app.is_hsl_bg = !app.is_hsl_bg; }
+            KeyCode::Char('1') => {
+                app.mode = DisplayMode::Ascii;
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('2') => {
+                app.mode = DisplayMode::Hex;
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('3') => {
+                app.mode = DisplayMode::Utf8;
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('4') => {
+                app.is_color256 = !app.is_color256;
+            }
+            KeyCode::Char('5') => {
+                app.is_rgb_bg = !app.is_rgb_bg;
+            }
+            KeyCode::Char('6') => {
+                app.is_hsl_bg = !app.is_hsl_bg;
+            }
             _ => {}
-        }
+        },
         InputMode::FileBrowser => {
             app.input_mode = InputMode::Normal;
         }
@@ -580,9 +632,7 @@ fn handle_key_event(
             handle_input(app, key.code, data, th);
         }
         InputMode::Edit => handle_edit(app, key.code, data, th),
-        InputMode::Normal => {
-            handle_normal(app, key.code, data, th, max_rows, should_break)
-        }
+        InputMode::Normal => handle_normal(app, key.code, data, th, max_rows, should_break),
     }
 }
 
@@ -599,13 +649,12 @@ fn run(
     let mut should_break = false;
 
     loop {
-        if should_break { break; }
+        if should_break {
+            break;
+        }
         let area = terminal.size()?;
         let th = area.height;
         let max_rows = app.max_rows(th);
-
-        // drain background search results
-        app.drain_search_rx();
 
         // clamp scroll
         let gtr = app.global_total_rows();
@@ -639,7 +688,14 @@ fn run(
         let evt = event::read()?;
         match evt {
             Event::Mouse(mouse) => {
-                handle_mouse_event(app, mouse, area, max_rows, &mut reopen_browser, &mut should_break);
+                handle_mouse_event(
+                    app,
+                    mouse,
+                    area,
+                    max_rows,
+                    &mut reopen_browser,
+                    &mut should_break,
+                );
             }
             Event::Key(key) => {
                 #[cfg(target_os = "windows")]
@@ -652,7 +708,16 @@ fn run(
                 {
                     last_key_time = std::time::Instant::now();
                 }
-                handle_key_event(app, key, data, filename, th, max_rows, &mut reopen_browser, &mut should_break);
+                handle_key_event(
+                    app,
+                    key,
+                    data,
+                    filename,
+                    th,
+                    max_rows,
+                    &mut reopen_browser,
+                    &mut should_break,
+                );
             }
             _ => {}
         }
@@ -706,12 +771,7 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                         let target = val.saturating_sub(1);
                         if target < app.total_packs {
                             if app.search_active {
-                                let off = target * app.pack_size;
-                                if let Some(ref mut s) = app.search {
-                                    if let Some(idx) = s.find_after(data, off) {
-                                        app.jump_global(idx);
-                                    }
-                                }
+                                app.next_global(data, th);
                             } else {
                                 app.current_pack = target;
                                 app.scroll_top = 0;
@@ -726,11 +786,7 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                     if let Some(val) = parse_hex_input(&buf) {
                         if val < app.file_size {
                             if app.search_active {
-                                if let Some(ref mut s) = app.search {
-                                    if let Some(idx) = s.find_after(data, val) {
-                                        app.jump_global(idx);
-                                    }
-                                }
+                                app.next_global(data, th);
                             } else {
                                 app.current_pack = val / app.pack_size;
                                 app.scroll_top = (val % app.pack_size) / 16;
@@ -743,29 +799,23 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                 }
                 InputMode::StringSearchInput => {
                     if let Some((label, bytes)) = search::parse_str_input(&buf) {
-                        let needle = bytes.clone();
-                        let acc = search::Search::new_hex(bytes, app.pack_size, app.file_size, label);
-                        app.apply_search(acc, data, th);
-                        app.start_bg_search(needle, data.to_vec());
+                        let len = bytes.len();
+                        app.apply_search(crate::search::Needle::Lit(bytes), len, label, data, th);
                     }
                 }
                 InputMode::SearchInput => {
                     if let Some(kind) = search::parse_input(&buf) {
-                        let (acc, needle) = match kind {
+                        let (needle, needle_len, label) = match kind {
                             search::SearchKind::Hex { bytes, label } => {
-                                let needle = bytes.clone();
-                                (search::Search::new_hex(bytes, app.pack_size, app.file_size, label), needle)
+                                let len = bytes.len();
+                                (crate::search::Needle::Lit(bytes), len, label)
                             }
                             search::SearchKind::Pat { pat, label } => {
-                                let needle: Vec<u8> = pat.iter().flat_map(|a| match a {
-                                    search::NibAtom::Exact(n) => vec![*n],
-                                    _ => vec![],
-                                }).collect();
-                                (search::Search::new_pat(pat, app.pack_size, app.file_size, label), needle)
+                                let len = pat.len() / 2;
+                                (crate::search::Needle::Pat(pat), len, label)
                             }
                         };
-                        app.apply_search(acc, data, th);
-                        app.start_bg_search(needle, data.to_vec());
+                        app.apply_search(needle, needle_len, label, data, th);
                     }
                 }
                 _ => {}
@@ -865,7 +915,11 @@ fn handle_edit(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
         KeyCode::PageDown => {
             let rows = app.max_rows(th);
             let target = app.cursor_byte + rows * 16;
-            app.cursor_byte = if target < app.file_size { target } else { app.file_size - 1 };
+            app.cursor_byte = if target < app.file_size {
+                target
+            } else {
+                app.file_size - 1
+            };
             app.ensure_cursor_visible(th);
         }
         KeyCode::Enter => {
@@ -918,7 +972,10 @@ fn handle_normal(
                 *do_break = true;
             }
         }
-        KeyCode::Char('?') => { app.input_mode = InputMode::Help; app.help_scroll = 0; }
+        KeyCode::Char('?') => {
+            app.input_mode = InputMode::Help;
+            app.help_scroll = 0;
+        }
         KeyCode::Char('m') => app.mode = app.mode.next(),
         KeyCode::Char('n') => {
             if app.is_color256 {
@@ -957,7 +1014,7 @@ fn handle_normal(
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if app.search_active {
-                app.prev_global();
+                app.prev_global(data, th);
             } else {
                 let gs = app.global_scroll_top();
                 if gs > 0 {
@@ -967,7 +1024,7 @@ fn handle_normal(
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.search_active {
-                app.next_global(data);
+                app.next_global(data, th);
             } else {
                 let gs = app.global_scroll_top();
                 let max = app.global_total_rows().saturating_sub(max_rows);
@@ -978,7 +1035,7 @@ fn handle_normal(
         }
         KeyCode::Left | KeyCode::Char('h') => {
             if app.search_active {
-                app.prev_page_match();
+                app.prev_global(data, th);
             } else if app.current_pack > 0 {
                 app.current_pack -= 1;
                 app.scroll_top = 0;
@@ -986,7 +1043,7 @@ fn handle_normal(
         }
         KeyCode::Right | KeyCode::Char('l') => {
             if app.search_active {
-                app.next_page_match();
+                app.next_global(data, th);
             } else if app.current_pack + 1 < app.total_packs {
                 app.current_pack += 1;
                 app.scroll_top = 0;
@@ -1002,29 +1059,19 @@ fn handle_normal(
             app.set_global_scroll((gs + max_rows).min(max));
         }
         KeyCode::Char('H') => {
-            let target = app.current_pack.saturating_sub(16);
             if app.search_active {
-                let off = target * app.pack_size;
-                if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(data, off) {
-                        app.jump_global(idx);
-                    }
-                }
+                app.prev_global(data, th);
             } else {
+                let target = app.current_pack.saturating_sub(16);
                 app.current_pack = target;
                 app.scroll_top = 0;
             }
         }
         KeyCode::Char('L') => {
-            let target = (app.current_pack + 16).min(app.total_packs - 1);
             if app.search_active {
-                let off = target * app.pack_size;
-                if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(data, off) {
-                        app.jump_global(idx);
-                    }
-                }
+                app.next_global(data, th);
             } else {
+                let target = (app.current_pack + 16).min(app.total_packs - 1);
                 app.current_pack = target;
                 app.scroll_top = 0;
             }
@@ -1042,11 +1089,7 @@ fn handle_normal(
         }
         KeyCode::Home => {
             if app.search_active {
-                if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(data, 0) {
-                        app.jump_global(idx);
-                    }
-                }
+                app.prev_global(data, th);
             } else {
                 app.current_pack = 0;
                 app.scroll_top = 0;
@@ -1054,17 +1097,7 @@ fn handle_normal(
         }
         KeyCode::Char('O') | KeyCode::Char('o') => {
             if app.search_active {
-                let cur = app.global_scroll_top() * 16;
-                let min = cur.saturating_sub(search::FIND_CHUNK);
-                if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(data, min) {
-                        if idx != app.global_match_idx.unwrap_or(usize::MAX)
-                            || min <= s.ranges[idx].0
-                        {
-                            app.jump_global(idx);
-                        }
-                    }
-                }
+                app.prev_global(data, th);
             } else {
                 let gs = app.global_scroll_top();
                 let step = 256 * (app.pack_size / 16);
@@ -1073,13 +1106,7 @@ fn handle_normal(
         }
         KeyCode::Char('P') | KeyCode::Char('p') => {
             if app.search_active {
-                let cur = app.global_scroll_top() * 16;
-                let min = cur + search::FIND_CHUNK;
-                if let Some(ref mut s) = app.search {
-                    if let Some(idx) = s.find_after(data, min) {
-                        app.jump_global(idx);
-                    }
-                }
+                app.next_global(data, th);
             } else {
                 let gs = app.global_scroll_top();
                 let step = 256 * (app.pack_size / 16);
@@ -1129,7 +1156,9 @@ static COLOR_CFG: OnceLock<color_config::ColorConfig> = OnceLock::new();
 /// 初始化全局颜色配置
 pub fn init_colors(path: &std::path::Path) -> Result<(), String> {
     let cfg = color_config::ColorConfig::load(path)?;
-    COLOR_CFG.set(cfg).map_err(|_| "color config already set".to_string())
+    COLOR_CFG
+        .set(cfg)
+        .map_err(|_| "color config already set".to_string())
 }
 
 /// 按编号获取字节类型样式
@@ -1173,7 +1202,11 @@ fn utf8_cls_style(cls: utf8::ByteClass) -> Style {
 
 /// 计算渐变色（蓝→绿），用于列号头的颜色渐变
 fn grad_color(i: usize, total: usize) -> Color {
-    let t = if total > 1 { i as f64 / (total - 1) as f64 } else { 0.0 };
+    let t = if total > 1 {
+        i as f64 / (total - 1) as f64
+    } else {
+        0.0
+    };
     let r = ((400.0 + 0.0 * t).min(1000.0) * 255.0 / 1000.0) as u8;
     let g = ((400.0 + 600.0 * t).min(1000.0) * 255.0 / 1000.0) as u8;
     let b = ((1000.0 - 0.0 * t).max(0.0) * 255.0 / 1000.0) as u8;
@@ -1187,14 +1220,23 @@ fn grad_color(i: usize, total: usize) -> Color {
 fn byte_disp(b: u8, mode: DisplayMode) -> String {
     match mode {
         DisplayMode::Ascii => {
-            if b == 0 { ". ".into() }
-            else if b == 0x0d { "\\r".into() }
-            else if b == 10 { "⏎ ".into() }
-            else if b == 0x1b { "\\e".into() }
-            else if (0x01..=0x1f).contains(&b) { format!("{:02x}", b) }
-            else if b == 0x20 { "· ".into() }
-            else if (0x21..=0x7e).contains(&b) { format!("{} ", b as char) }
-            else { format!("{:02x}", b) }
+            if b == 0 {
+                ". ".into()
+            } else if b == 0x0d {
+                "\\r".into()
+            } else if b == 10 {
+                "⏎ ".into()
+            } else if b == 0x1b {
+                "\\e".into()
+            } else if (0x01..=0x1f).contains(&b) {
+                format!("{:02x}", b)
+            } else if b == 0x20 {
+                "· ".into()
+            } else if (0x21..=0x7e).contains(&b) {
+                format!("{} ", b as char)
+            } else {
+                format!("{:02x}", b)
+            }
         }
         _ => format!("{:02x}", b),
     }
@@ -1207,22 +1249,38 @@ fn byte_disp(b: u8, mode: DisplayMode) -> String {
 fn byte_type_group(b: u8, mode: DisplayMode) -> u8 {
     match mode {
         DisplayMode::Ascii => {
-            if b == 0 { 1 }
-            else if b == 0x0d { 2 }
-            else if b == 10 || b == 0x20 { 3 }
-            else if b == 0x1b || (0x01..=0x1f).contains(&b) { 4 }
-            else if (0x21..=0x7e).contains(&b) { 5 }
-            else if (0x80..=0xbf).contains(&b) { 6 }
-            else { 7 }
+            if b == 0 {
+                1
+            } else if b == 0x0d {
+                2
+            } else if b == 10 || b == 0x20 {
+                3
+            } else if b == 0x1b || (0x01..=0x1f).contains(&b) {
+                4
+            } else if (0x21..=0x7e).contains(&b) {
+                5
+            } else if (0x80..=0xbf).contains(&b) {
+                6
+            } else {
+                7
+            }
         }
         DisplayMode::Hex => {
-            if (0x20..=0x7e).contains(&b) { 1 }
-            else if b == 0 { 2 }
-            else if b == 0x0d { 3 }
-            else if b == 10 { 4 }
-            else if b == 0x1b || (0x01..=0x1f).contains(&b) { 5 }
-            else if (0x80..=0xbf).contains(&b) { 6 }
-            else { 7 }
+            if (0x20..=0x7e).contains(&b) {
+                1
+            } else if b == 0 {
+                2
+            } else if b == 0x0d {
+                3
+            } else if b == 10 {
+                4
+            } else if b == 0x1b || (0x01..=0x1f).contains(&b) {
+                5
+            } else if (0x80..=0xbf).contains(&b) {
+                6
+            } else {
+                7
+            }
         }
         _ => 0,
     }
@@ -1232,22 +1290,38 @@ fn byte_type_group(b: u8, mode: DisplayMode) -> u8 {
 fn byte_style(b: u8, mode: DisplayMode) -> Style {
     match mode {
         DisplayMode::Ascii => {
-            if b == 0 { sp(1) }
-            else if b == 0x0d { sp(2) }
-            else if b == 10 || b == 0x20 { sp(5) }
-            else if b == 0x1b || (0x01..=0x1f).contains(&b) { sp(4) }
-            else if (0x21..=0x7e).contains(&b) { sp(5) }
-            else if (0x80..=0xbf).contains(&b) { sp(6) }
-            else { sp(8) }
+            if b == 0 {
+                sp(1)
+            } else if b == 0x0d {
+                sp(2)
+            } else if b == 10 || b == 0x20 {
+                sp(5)
+            } else if b == 0x1b || (0x01..=0x1f).contains(&b) {
+                sp(4)
+            } else if (0x21..=0x7e).contains(&b) {
+                sp(5)
+            } else if (0x80..=0xbf).contains(&b) {
+                sp(6)
+            } else {
+                sp(8)
+            }
         }
         DisplayMode::Hex => {
-            if (0x20..=0x7e).contains(&b) { sp(10) }
-            else if b == 0 { sp(1) }
-            else if b == 0x0d { sp(2) }
-            else if b == 10 { sp(5) }
-            else if b == 0x1b || (0x01..=0x1f).contains(&b) { sp(4) }
-            else if (0x80..=0xbf).contains(&b) { sp(6) }
-            else { sp(8) }
+            if (0x20..=0x7e).contains(&b) {
+                sp(10)
+            } else if b == 0 {
+                sp(1)
+            } else if b == 0x0d {
+                sp(2)
+            } else if b == 10 {
+                sp(5)
+            } else if b == 0x1b || (0x01..=0x1f).contains(&b) {
+                sp(4)
+            } else if (0x80..=0xbf).contains(&b) {
+                sp(6)
+            } else {
+                sp(8)
+            }
         }
         DisplayMode::Utf8 => sp(5),
     }
@@ -1258,14 +1332,37 @@ fn byte_style(b: u8, mode: DisplayMode) -> Style {
 /// 按 Unicode 区块分类：ASCII、控制符、CJK、韩文、假名、标点等。
 fn char_type_group(ch: char) -> u8 {
     let cp = ch as u32;
-    if cp >= 0x21 && cp <= 0x7e { 1 }           // Printable ASCII
-    else if ch == '\n' || ch == '\r' || ch == '\t' { 2 } // Common control
-    else if cp < 0x20 { 3 }                      // Other control
-    else if cp >= 0x4E00 && cp <= 0x9FFF { 4 }   // CJK
-    else if cp >= 0xAC00 && cp <= 0xD7AF { 5 }   // Hangul
-    else if cp >= 0x3000 && cp <= 0x30FF { 6 }   // CJK symbols + kana
-    else if cp >= 0x2000 && cp <= 0x206F { 7 }   // General punctuation
-    else { 8 }                                    // Other Unicode
+    if cp >= 0x21 && cp <= 0x7e {
+        1
+    }
+    // Printable ASCII
+    else if ch == '\n' || ch == '\r' || ch == '\t' {
+        2
+    }
+    // Common control
+    else if cp < 0x20 {
+        3
+    }
+    // Other control
+    else if cp >= 0x4E00 && cp <= 0x9FFF {
+        4
+    }
+    // CJK
+    else if cp >= 0xAC00 && cp <= 0xD7AF {
+        5
+    }
+    // Hangul
+    else if cp >= 0x3000 && cp <= 0x30FF {
+        6
+    }
+    // CJK symbols + kana
+    else if cp >= 0x2000 && cp <= 0x206F {
+        7
+    }
+    // General punctuation
+    else {
+        8
+    } // Other Unicode
 }
 
 /// UTF-8 字符 → 基础样式映射（按 Unicode 区块选择颜色）
@@ -1296,7 +1393,11 @@ fn utf8_char_style(ch: char) -> Style {
 /// 将颜色亮度降至 50%（用于编辑模式背景压暗）
 fn dim_color(c: Color) -> Color {
     let (r, g, b) = color_config::color_rgb(c);
-    Color::Rgb((r as u16 * 50 / 100) as u8, (g as u16 * 50 / 100) as u8, (b as u16 * 50 / 100) as u8)
+    Color::Rgb(
+        (r as u16 * 50 / 100) as u8,
+        (g as u16 * 50 / 100) as u8,
+        (b as u16 * 50 / 100) as u8,
+    )
 }
 
 /// 压暗样式背景色 50%（编辑模式下非光标字节使用）
@@ -1314,11 +1415,17 @@ fn dim_bg_10pct(s: Style) -> Style {
 ///
 /// 边界处理：无 prev 取 off+16，无 next 取 off-16。
 fn rgb_bg(data: &[u8], off: usize, file_size: usize) -> Color {
-    let r = if off > 0 { data[off - 1] }
-            else { data.get(off + 16).copied().unwrap_or(0) };
+    let r = if off > 0 {
+        data[off - 1]
+    } else {
+        data.get(off + 16).copied().unwrap_or(0)
+    };
     let g = data[off];
-    let b = if off + 1 < file_size { data[off + 1] }
-            else { data.get(off + 16).copied().unwrap_or(0) };
+    let b = if off + 1 < file_size {
+        data[off + 1]
+    } else {
+        data.get(off + 16).copied().unwrap_or(0)
+    };
     Color::Rgb(r, g, b)
 }
 
@@ -1330,22 +1437,41 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = l - c / 2.0;
-    let (r, g, b) = if h < 60.0 { (c, x, 0.0) }
-        else if h < 120.0 { (x, c, 0.0) }
-        else if h < 180.0 { (0.0, c, x) }
-        else if h < 240.0 { (0.0, x, c) }
-        else if h < 300.0 { (x, 0.0, c) }
-        else { (c, 0.0, x) };
-    (((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8)
+    let (r, g, b) = if h < 60.0 {
+        (c, x, 0.0)
+    } else if h < 120.0 {
+        (x, c, 0.0)
+    } else if h < 180.0 {
+        (0.0, c, x)
+    } else if h < 240.0 {
+        (0.0, x, c)
+    } else if h < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
 }
 
 /// 计算 HSL 背景色：H=prev, L=self, S=next
 ///
 /// 边界处理同 rgb_bg。H 映射 0~360°，L/S 映射 0~100%。
 fn hsl_bg(data: &[u8], off: usize, file_size: usize) -> Color {
-    let b1 = if off > 0 { data[off - 1] } else { data.get(off + 16).copied().unwrap_or(0) };
+    let b1 = if off > 0 {
+        data[off - 1]
+    } else {
+        data.get(off + 16).copied().unwrap_or(0)
+    };
     let b2 = data[off];
-    let b3 = if off + 1 < file_size { data[off + 1] } else { data.get(off + 16).copied().unwrap_or(0) };
+    let b3 = if off + 1 < file_size {
+        data[off + 1]
+    } else {
+        data.get(off + 16).copied().unwrap_or(0)
+    };
     let h = b1 as f64 * 360.0 / 255.0;
     let l = b2 as f64 / 255.0;
     let s = b3 as f64 / 255.0;
@@ -1353,33 +1479,51 @@ fn hsl_bg(data: &[u8], off: usize, file_size: usize) -> Color {
     Color::Rgb(r, g, b)
 }
 
-const STD_COLORS: [(u8,u8,u8); 8] = [
-    (0,0,0), (170,0,0), (0,170,0), (170,85,0),
-    (0,0,170), (170,0,170), (0,170,170), (170,170,170),
+const STD_COLORS: [(u8, u8, u8); 8] = [
+    (0, 0, 0),
+    (170, 0, 0),
+    (0, 170, 0),
+    (170, 85, 0),
+    (0, 0, 170),
+    (170, 0, 170),
+    (0, 170, 170),
+    (170, 170, 170),
 ];
-const BRIGHT_COLORS: [(u8,u8,u8); 8] = [
-    (85,85,85), (255,85,85), (85,255,85), (255,255,85),
-    (85,85,255), (255,85,255), (85,255,255), (255,255,255),
+const BRIGHT_COLORS: [(u8, u8, u8); 8] = [
+    (85, 85, 85),
+    (255, 85, 85),
+    (85, 255, 85),
+    (255, 255, 85),
+    (85, 85, 255),
+    (255, 85, 255),
+    (85, 255, 255),
+    (255, 255, 255),
 ];
 
 /// 将 256 色索引转换为 RGB（16-231 为 6×6×6 色立方体）
-fn cube_rgb(idx: u8) -> (u8,u8,u8) {
+fn cube_rgb(idx: u8) -> (u8, u8, u8) {
     let i = (idx - 16) as usize;
-    let r = i / 36; let g = (i / 6) % 6; let b = i % 6;
-    (if r==0 {0} else {55+r*40} as u8, if g==0 {0} else {55+g*40} as u8, if b==0 {0} else {55+b*40} as u8)
+    let r = i / 36;
+    let g = (i / 6) % 6;
+    let b = i % 6;
+    (
+        if r == 0 { 0 } else { 55 + r * 40 } as u8,
+        if g == 0 { 0 } else { 55 + g * 40 } as u8,
+        if b == 0 { 0 } else { 55 + b * 40 } as u8,
+    )
 }
 
 /// 将 256 色索引转换为 RGB（232-255 为 24 级灰度）
-fn gray_rgb(idx: u8) -> (u8,u8,u8) {
+fn gray_rgb(idx: u8) -> (u8, u8, u8) {
     let v = 8 + (idx - 232) * 10;
     (v, v, v)
 }
 
 /// 将 256 色索引转换为 RGB（标准色/亮色/色立方体/灰度）
-fn indexed_rgb(idx: u8) -> (u8,u8,u8) {
+fn indexed_rgb(idx: u8) -> (u8, u8, u8) {
     match idx {
         0..=7 => STD_COLORS[idx as usize],
-        8..=15 => BRIGHT_COLORS[(idx-8) as usize],
+        8..=15 => BRIGHT_COLORS[(idx - 8) as usize],
         16..=231 => cube_rgb(idx),
         _ => gray_rgb(idx),
     }
@@ -1387,7 +1531,7 @@ fn indexed_rgb(idx: u8) -> (u8,u8,u8) {
 
 /// 计算 256 色索引的感知亮度（BT.601 公式）
 fn indexed_luminance(idx: u8) -> f64 {
-    let (r,g,b) = indexed_rgb(idx);
+    let (r, g, b) = indexed_rgb(idx);
     0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64
 }
 
@@ -1419,14 +1563,22 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
     let s = if app.cursor_focused && app.cursor_byte == off {
         sp(16)
     } else if let Some((ms, me)) = mr {
-        if ms <= off && off < me { sp(13) } else { base }
-    } else if app.search_active && app.pack_ranges.iter().any(|&(s, e)| s <= off && off < e) {
-        sp(12)
+        if ms <= off && off < me {
+            sp(13)
+        } else {
+            base
+        }
     } else if let (Some(a), Some(b)) = (app.sel_start, app.sel_end) {
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
         if off >= lo && off <= hi {
-            if off == a { sp(15) } else { sp(17) }
-        } else { base }
+            if off == a {
+                sp(15)
+            } else {
+                sp(17)
+            }
+        } else {
+            base
+        }
     } else if app.input_mode == InputMode::Edit {
         dim_style(base)
     } else {
@@ -1444,7 +1596,10 @@ fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
     let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
     let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
     f.render_widget(
-        Paragraph::new(Span::styled(top_bar_full, Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60)))),
+        Paragraph::new(Span::styled(
+            top_bar_full,
+            Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60)),
+        )),
         Rect::new(0, 0, area.width, 1),
     );
     // 数据区从第 2 行开始（第 0 行顶栏，第 1 行列号头在 build_lines 中）
@@ -1468,7 +1623,11 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
     let glen = hdr.len() - leading;
     let mut hspans: Vec<Span<'a>> = Vec::new();
     for (i, ch) in hdr.chars().enumerate() {
-        let col = if i < leading { Color::White } else { grad_color(i - leading, glen) };
+        let col = if i < leading {
+            Color::White
+        } else {
+            grad_color(i - leading, glen)
+        };
         hspans.push(Span::styled(ch.to_string(), Style::default().fg(col)));
     }
     lines.push(Line::from(hspans));
@@ -1509,7 +1668,10 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
         };
         let line_color = Color::Rgb(r, g, b);
         for ch in hex.chars() {
-            spans.push(Span::styled(ch.to_string(), Style::default().fg(line_color)));
+            spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().fg(line_color),
+            ));
         }
         spans.push(Span::raw("  "));
 
@@ -1520,15 +1682,32 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 let tail_b = data[p];
                 let ts = if app.is_rgb_bg {
                     let bg = rgb_bg(data_full, go, app.file_size);
-                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
                     resolve(app, go, Style::default().bg(bg).fg(fg), mr)
                 } else if app.is_hsl_bg {
                     let bg = hsl_bg(data_full, go, app.file_size);
-                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
                     resolve(app, go, Style::default().bg(bg).fg(fg), mr)
                 } else if app.is_color256 {
-                    let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
-                    resolve(app, go, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
+                    let fg = if indexed_luminance(tail_b) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
+                    resolve(
+                        app,
+                        go,
+                        Style::default().bg(Color::Indexed(tail_b)).fg(fg),
+                        mr,
+                    )
                 } else {
                     resolve(app, go, sp(3), mr)
                 };
@@ -1555,7 +1734,11 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             c if (c as u32) < 0x20 => format!("{:02x}", c as u8),
                             _ => {
                                 let s: String = ch.to_string();
-                                if dw == 1 { format!("{} ", s) } else { s }
+                                if dw == 1 {
+                                    format!("{} ", s)
+                                } else {
+                                    s
+                                }
                             }
                         };
                         let cur_type = char_type_group(*ch);
@@ -1568,10 +1751,18 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let dim = same_count % 2 == 1;
                         let base = if app.is_rgb_bg {
                             let bg = rgb_bg(data_full, go, app.file_size);
-                            let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                            let fg = if color_config::luminance(bg) > 128.0 {
+                                Color::Black
+                            } else {
+                                Color::White
+                            };
                             Style::default().bg(bg).fg(fg)
                         } else if app.is_color256 {
-                            let fg = if indexed_luminance(*ch as u8) > 128.0 { Color::Black } else { Color::White };
+                            let fg = if indexed_luminance(*ch as u8) > 128.0 {
+                                Color::Black
+                            } else {
+                                Color::White
+                            };
                             Style::default().bg(Color::Indexed(*ch as u8)).fg(fg)
                         } else if (*ch as u32) < 0x20 {
                             byte_style(*ch as u8, DisplayMode::Ascii)
@@ -1590,15 +1781,32 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             let tail_b = data[off + pos + ci];
                             let ts = if app.is_rgb_bg {
                                 let bg = rgb_bg(data_full, cgo, app.file_size);
-                                let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                                let fg = if color_config::luminance(bg) > 128.0 {
+                                    Color::Black
+                                } else {
+                                    Color::White
+                                };
                                 resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
                             } else if app.is_hsl_bg {
                                 let bg = hsl_bg(data_full, cgo, app.file_size);
-                                let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                                let fg = if color_config::luminance(bg) > 128.0 {
+                                    Color::Black
+                                } else {
+                                    Color::White
+                                };
                                 resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
                             } else if app.is_color256 {
-                                let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
-                                resolve(app, cgo, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
+                                let fg = if indexed_luminance(tail_b) > 128.0 {
+                                    Color::Black
+                                } else {
+                                    Color::White
+                                };
+                                resolve(
+                                    app,
+                                    cgo,
+                                    Style::default().bg(Color::Indexed(tail_b)).fg(fg),
+                                    mr,
+                                )
                             } else {
                                 resolve(app, cgo, sp(3), mr)
                             };
@@ -1611,14 +1819,26 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let b = data[bo];
                         let base = if app.is_rgb_bg {
                             let bg = rgb_bg(data_full, go, app.file_size);
-                            let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                            let fg = if color_config::luminance(bg) > 128.0 {
+                                Color::Black
+                            } else {
+                                Color::White
+                            };
                             Style::default().bg(bg).fg(fg)
                         } else if app.is_hsl_bg {
                             let bg = hsl_bg(data_full, go, app.file_size);
-                            let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                            let fg = if color_config::luminance(bg) > 128.0 {
+                                Color::Black
+                            } else {
+                                Color::White
+                            };
                             Style::default().bg(bg).fg(fg)
                         } else if app.is_color256 {
-                            let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
+                            let fg = if indexed_luminance(b) > 128.0 {
+                                Color::Black
+                            } else {
+                                Color::White
+                            };
                             Style::default().bg(Color::Indexed(b)).fg(fg)
                         } else {
                             utf8_cls_style(utf8::byte_class(b))
@@ -1650,14 +1870,26 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     let d = byte_disp(b, app.mode);
                     let non_cursor_style = if app.is_rgb_bg {
                         let bg = rgb_bg(data_full, go, app.file_size);
-                        let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
                         Style::default().bg(bg).fg(fg)
                     } else if app.is_hsl_bg {
                         let bg = hsl_bg(data_full, go, app.file_size);
-                        let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
                         Style::default().bg(bg).fg(fg)
                     } else if app.is_color256 {
-                        let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
+                        let fg = if indexed_luminance(b) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
                         Style::default().bg(Color::Indexed(b)).fg(fg)
                     } else {
                         dim_style(byte_style(b, app.mode))
@@ -1681,20 +1913,38 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 }
                 let base = if app.is_rgb_bg {
                     let bg = rgb_bg(data_full, go, app.file_size);
-                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
                     Style::default().bg(bg).fg(fg)
                 } else if app.is_hsl_bg {
                     let bg = hsl_bg(data_full, go, app.file_size);
-                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
                     Style::default().bg(bg).fg(fg)
                 } else if app.is_color256 {
-                    let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
+                    let fg = if indexed_luminance(b) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
                     Style::default().bg(Color::Indexed(b)).fg(fg)
                 } else {
                     byte_style(b, app.mode)
                 };
                 let sty = resolve(app, go, base, mr);
-                let final_sty = if app.is_color256 || app.is_rgb_bg || app.is_hsl_bg { sty } else if dim { dim_bg_10pct(sty) } else { sty };
+                let final_sty = if app.is_color256 || app.is_rgb_bg || app.is_hsl_bg {
+                    sty
+                } else if dim {
+                    dim_bg_10pct(sty)
+                } else {
+                    sty
+                };
                 spans.push(Span::styled(byte_disp(b, app.mode), final_sty));
             }
         }
@@ -1732,12 +1982,12 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
-        InputMode::SearchInput | InputMode::StringSearchInput | InputMode::GotoInput | InputMode::GotoByteInput => {
+        InputMode::SearchInput
+        | InputMode::StringSearchInput
+        | InputMode::GotoInput
+        | InputMode::GotoByteInput => {
             return f.render_widget(
-                Paragraph::new(Span::raw(format!(
-                    "{} {}",
-                    app.input_prompt, app.input_buf
-                ))),
+                Paragraph::new(Span::raw(format!("{} {}", app.input_prompt, app.input_buf))),
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
@@ -1746,9 +1996,9 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
         InputMode::Normal => {
             if app.search_active {
                 if let Some(ref s) = app.search {
-                    let total = s.ranges.len();
+                    let total = s.count;
                     let plus = if s.has_more() { "+" } else { "" };
-                    let cur = app.global_match_idx.map_or(0, |i| i + 1);
+                    let cur = app.current_match.map_or(0, |i| i + 1);
                     let mut disp = s.label.clone();
                     if disp.len() > 24 {
                         disp.truncate(24);
@@ -1766,18 +2016,27 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             }
             let dirty = if app.dirty { " [MODIFIED]" } else { "" };
             // hex width based on file size
-            let hex_w = if app.file_size <= 0xff { 2 }
-                else if app.file_size <= 0xffff { 4 }
-                else if app.file_size <= 0xffffff { 6 }
-                else { 8 };
+            let hex_w = if app.file_size <= 0xff {
+                2
+            } else if app.file_size <= 0xffff {
+                4
+            } else if app.file_size <= 0xffffff {
+                6
+            } else {
+                8
+            };
             let offset_str = format!("@{:0width$x}", app.cursor_byte, width = hex_w);
             let max_rows = app.max_rows(area.height);
-            let last_global_row = (app.global_scroll_top() + max_rows - 1).min(app.global_total_rows().saturating_sub(1));
+            let last_global_row = (app.global_scroll_top() + max_rows - 1)
+                .min(app.global_total_rows().saturating_sub(1));
             let last_pack = last_global_row / (app.pack_size / 16);
             let pack_str = format!("pack {:x}/{:x}", last_pack + 1, app.total_packs);
             let help_spans: Vec<Span> = vec![
                 Span::raw("  ["),
-                Span::styled("H", Style::default().add_modifier(ratatui::style::Modifier::UNDERLINED)),
+                Span::styled(
+                    "H",
+                    Style::default().add_modifier(ratatui::style::Modifier::UNDERLINED),
+                ),
                 Span::raw("ELP]"),
             ];
 
@@ -1785,29 +2044,61 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             let mut spans = if app.is_rgb_bg {
                 let label_chars: Vec<char> = mode_label.chars().collect();
                 let n = label_chars.len();
-                label_chars.iter().enumerate().map(|(i, &c)| {
-                    let r = if i > 0 { label_chars[i - 1] as u8 } else { c as u8 };
-                    let g = c as u8;
-                    let b = if i + 1 < n { label_chars[i + 1] as u8 } else { c as u8 };
-                    let bg = Color::Rgb(r, g, b);
-                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
-                    Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
-                }).collect::<Vec<_>>()
+                label_chars
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &c)| {
+                        let r = if i > 0 {
+                            label_chars[i - 1] as u8
+                        } else {
+                            c as u8
+                        };
+                        let g = c as u8;
+                        let b = if i + 1 < n {
+                            label_chars[i + 1] as u8
+                        } else {
+                            c as u8
+                        };
+                        let bg = Color::Rgb(r, g, b);
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
+                        Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
+                    })
+                    .collect::<Vec<_>>()
             } else if app.is_hsl_bg {
                 let label_chars: Vec<char> = mode_label.chars().collect();
                 let n = label_chars.len();
-                label_chars.iter().enumerate().map(|(i, &c)| {
-                    let b1 = if i > 0 { label_chars[i - 1] as u8 } else { c as u8 };
-                    let b2 = c as u8;
-                    let b3 = if i + 1 < n { label_chars[i + 1] as u8 } else { c as u8 };
-                    let h = b1 as f64 * 360.0 / 255.0;
-                    let l = b2 as f64 / 255.0;
-                    let s = b3 as f64 / 255.0;
-                    let (rr, gg, bb) = hsl_to_rgb(h, s, l);
-                    let bg = Color::Rgb(rr, gg, bb);
-                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
-                    Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
-                }).collect::<Vec<_>>()
+                label_chars
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &c)| {
+                        let b1 = if i > 0 {
+                            label_chars[i - 1] as u8
+                        } else {
+                            c as u8
+                        };
+                        let b2 = c as u8;
+                        let b3 = if i + 1 < n {
+                            label_chars[i + 1] as u8
+                        } else {
+                            c as u8
+                        };
+                        let h = b1 as f64 * 360.0 / 255.0;
+                        let l = b2 as f64 / 255.0;
+                        let s = b3 as f64 / 255.0;
+                        let (rr, gg, bb) = hsl_to_rgb(h, s, l);
+                        let bg = Color::Rgb(rr, gg, bb);
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
+                        Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
+                    })
+                    .collect::<Vec<_>>()
             } else if app.is_color256 {
                 let grad = [
                     Color::Rgb(100, 149, 237),
@@ -1818,14 +2109,21 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                     Color::Rgb(219, 89, 207),
                     Color::Rgb(219, 112, 147),
                 ];
-                mode_label.chars().enumerate().map(|(i, c)| {
-                    Span::styled(c.to_string(), Style::default().fg(Color::White).bg(grad[i]))
-                }).collect::<Vec<_>>()
+                mode_label
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        Span::styled(c.to_string(), Style::default().fg(Color::White).bg(grad[i]))
+                    })
+                    .collect::<Vec<_>>()
             } else {
                 vec![Span::styled(mode_label, sp(5))]
             };
             spans.push(Span::styled(dirty, sp(5)));
-            spans.push(Span::styled(format!("  {}  {}", offset_str, pack_str), sp(5)));
+            spans.push(Span::styled(
+                format!("  {}  {}", offset_str, pack_str),
+                sp(5),
+            ));
             spans.extend(help_spans);
             return f.render_widget(
                 Paragraph::new(Line::from(spans)),
@@ -1834,7 +2132,10 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
         }
         InputMode::ModeSelect => {
             return f.render_widget(
-                Paragraph::new(Span::styled("↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB 6:HSL", sp(5))),
+                Paragraph::new(Span::styled(
+                    "↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB 6:HSL",
+                    sp(5),
+                )),
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
@@ -1892,12 +2193,14 @@ fn draw_help(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let inner = Rect::new(x + 1, y + 1, inner_w as u16, inner_h as u16);
     let help: Vec<Line> = visible
         .iter()
-        .map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(Color::White))))
+        .map(|l| {
+            Line::from(Span::styled(
+                l.to_string(),
+                Style::default().fg(Color::White),
+            ))
+        })
         .collect();
-    f.render_widget(
-        Paragraph::new(help).wrap(Wrap { trim: false }),
-        inner,
-    );
+    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: false }), inner);
     // scrollbar on right edge
     if max_scroll > 0 && inner_h > 0 {
         let sb_x = x + w - 2; // inside right border
@@ -1910,7 +2213,9 @@ fn draw_help(f: &mut ratatui::Frame, app: &App, area: Rect) {
             let style = if row == thumb_pos {
                 Style::default().fg(Color::Cyan).bg(Color::Rgb(20, 20, 40))
             } else {
-                Style::default().fg(Color::DarkGray).bg(Color::Rgb(20, 20, 40))
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .bg(Color::Rgb(20, 20, 40))
             };
             f.render_widget(
                 Paragraph::new(Span::styled(ch, style)),
@@ -1933,11 +2238,20 @@ fn draw_save_dialog(f: &mut ratatui::Frame, app: &App, area: Rect) {
         Paragraph::new(Span::raw("Save changes before quitting?")),
         Rect::new(dx + 2, dy + 1, dw - 4, 1),
     );
-    let focus_style = COLOR_CFG.get()
+    let focus_style = COLOR_CFG
+        .get()
         .map(|c| c.sp_focused_button)
         .unwrap_or_else(|| Style::default().fg(Color::Black).bg(Color::White));
-    let ys = if app.save_selected { focus_style } else { Style::default() };
-    let ns = if !app.save_selected { focus_style } else { Style::default() };
+    let ys = if app.save_selected {
+        focus_style
+    } else {
+        Style::default()
+    };
+    let ns = if !app.save_selected {
+        focus_style
+    } else {
+        Style::default()
+    };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" Yes ", ys),
@@ -1965,15 +2279,25 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let dialog = Rect::new(dx, dy, dw, dh);
     f.render_widget(Clear, dialog);
     for (i, (mode, label)) in modes.iter().enumerate() {
-        let sty = if app.mode == *mode { sp(16) } else { Style::default() };
+        let sty = if app.mode == *mode {
+            sp(16)
+        } else {
+            Style::default()
+        };
         f.render_widget(
             Paragraph::new(Span::styled(format!(" {} ", label), sty)),
             Rect::new(dx, dy + i as u16, dw, 1),
         );
     }
-    let checkbox = if app.is_color256 { " [x] 256 " } else { " [ ] 256 " };
+    let checkbox = if app.is_color256 {
+        " [x] 256 "
+    } else {
+        " [ ] 256 "
+    };
     let cb_style = if app.is_color256 {
-        Style::default().fg(Color::White).bg(Color::Rgb(147, 112, 219))
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(147, 112, 219))
     } else {
         Style::default()
     };
@@ -1981,9 +2305,15 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         Paragraph::new(Span::styled(checkbox, cb_style)),
         Rect::new(dx, dy + 3, dw, 1),
     );
-    let rgb_checkbox = if app.is_rgb_bg { " [x] RGB " } else { " [ ] RGB " };
+    let rgb_checkbox = if app.is_rgb_bg {
+        " [x] RGB "
+    } else {
+        " [ ] RGB "
+    };
     let rgb_style = if app.is_rgb_bg {
-        Style::default().fg(Color::White).bg(Color::Rgb(147, 112, 219))
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(147, 112, 219))
     } else {
         Style::default()
     };
@@ -1991,9 +2321,15 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         Paragraph::new(Span::styled(rgb_checkbox, rgb_style)),
         Rect::new(dx, dy + 4, dw, 1),
     );
-    let hsl_checkbox = if app.is_hsl_bg { " [x] HSL " } else { " [ ] HSL " };
+    let hsl_checkbox = if app.is_hsl_bg {
+        " [x] HSL "
+    } else {
+        " [ ] HSL "
+    };
     let hsl_style = if app.is_hsl_bg {
-        Style::default().fg(Color::White).bg(Color::Rgb(147, 112, 219))
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(147, 112, 219))
     } else {
         Style::default()
     };
@@ -2100,7 +2436,9 @@ fn run_file_browser_only(
                     }
                     KeyCode::Backspace => {
                         if fb.current_dir.parent().is_some() {
-                            let new_dir = fb.current_dir.parent()
+                            let new_dir = fb
+                                .current_dir
+                                .parent()
                                 .unwrap_or(&fb.current_dir)
                                 .to_path_buf();
                             fb.current_dir = new_dir;

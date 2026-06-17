@@ -79,7 +79,7 @@ pub struct Search {
 }
 
 /// 搜索模式：精确字节序列或 nibble 模式
-enum Needle {
+pub enum Needle {
     Lit(Vec<u8>),
     Pat(Vec<NibAtom>),
 }
@@ -103,31 +103,49 @@ impl Search {
         let l0 = (fs + ps - 1) / ps;
         let l1 = (fs + L1_SIZE - 1) / L1_SIZE;
         let l2 = (fs + L2_SIZE - 1) / L2_SIZE;
-        Self { needle: Needle::Lit(data), pack_size: ps, file_size: fs, ranges: Vec::new(),
+        Self {
+            needle: Needle::Lit(data),
+            pack_size: ps,
+            file_size: fs,
+            ranges: Vec::new(),
             has_match_l0: vec![0u8; (l0 + 7) / 8],
             has_match_l1: vec![0u8; (l1 + 7) / 8],
             has_match_l2: vec![0u8; (l2 + 7) / 8],
-            match_count: 0, scanned: 0, label }
+            match_count: 0,
+            scanned: 0,
+            label,
+        }
     }
     /// 创建 nibble 模式搜索
     pub fn new_pat(pat: Vec<NibAtom>, ps: usize, fs: usize, label: String) -> Self {
         let l0 = (fs + ps - 1) / ps;
         let l1 = (fs + L1_SIZE - 1) / L1_SIZE;
         let l2 = (fs + L2_SIZE - 1) / L2_SIZE;
-        Self { needle: Needle::Pat(pat), pack_size: ps, file_size: fs, ranges: Vec::new(),
+        Self {
+            needle: Needle::Pat(pat),
+            pack_size: ps,
+            file_size: fs,
+            ranges: Vec::new(),
             has_match_l0: vec![0u8; (l0 + 7) / 8],
             has_match_l1: vec![0u8; (l1 + 7) / 8],
             has_match_l2: vec![0u8; (l2 + 7) / 8],
-            match_count: 0, scanned: 0, label }
+            match_count: 0,
+            scanned: 0,
+            label,
+        }
     }
     /// 是否还有未扫描的数据
-    pub fn has_more(&self) -> bool { self.scanned < self.file_size }
+    pub fn has_more(&self) -> bool {
+        self.scanned < self.file_size
+    }
 
     /// 增量搜索：从 scanned 位置继续扫描，至少扫描到 min_off + CHUNK
     ///
     /// 返回 true 表示找到了新的匹配。
     pub fn extend(&mut self, mmap: &[u8], min_off: usize) -> bool {
-        if min_off < self.scanned { return false; }
+        if min_off < self.scanned {
+            return false;
+        }
         let mut start = (self.scanned / CHUNK) * CHUNK;
         let mut found = false;
         while start < self.file_size && (start < min_off + CHUNK || self.ranges.is_empty()) {
@@ -135,12 +153,18 @@ impl Search {
             let new_matches: Vec<(usize, usize)> = match &self.needle {
                 Needle::Lit(needle) => {
                     let nlen = needle.len();
-                    if nlen == 0 { break; }
+                    if nlen == 0 {
+                        break;
+                    }
                     let mut out = Vec::new();
                     let mut pos = start;
                     loop {
-                        pos = match mmap[pos..end].windows(nlen).position(|w| w == needle.as_slice()) {
-                            Some(p) => pos + p, None => break,
+                        pos = match mmap[pos..end]
+                            .windows(nlen)
+                            .position(|w| w == needle.as_slice())
+                        {
+                            Some(p) => pos + p,
+                            None => break,
                         };
                         let me = pos + nlen;
                         if self.ranges.last().map_or(true, |(_, e)| *e <= pos) {
@@ -152,7 +176,9 @@ impl Search {
                 }
                 Needle::Pat(atoms) => {
                     let nbytes = atoms.len() / 2;
-                    if nbytes == 0 { break; }
+                    if nbytes == 0 {
+                        break;
+                    }
                     let mut out = Vec::new();
                     let mut pos = start;
                     while pos + nbytes <= end {
@@ -172,7 +198,9 @@ impl Search {
                 self.match_count += 1;
                 self.mark_all(s, e);
             }
-            if !self.ranges.is_empty() && !found { found = true; }
+            if !self.ranges.is_empty() && !found {
+                found = true;
+            }
             self.scanned = end;
             start = end;
         }
@@ -180,7 +208,9 @@ impl Search {
     }
     /// 查找 min 位置之后的第一个匹配，必要时触发增量搜索
     pub fn find_after(&mut self, mmap: &[u8], min: usize) -> Option<usize> {
-        if let Some(i) = self.ranges.iter().position(|(s, _)| *s >= min) { return Some(i); }
+        if let Some(i) = self.ranges.iter().position(|(s, _)| *s >= min) {
+            return Some(i);
+        }
         self.extend(mmap, min);
         self.ranges.iter().position(|(s, _)| *s >= min)
     }
@@ -190,7 +220,9 @@ impl Search {
         let end = (base + self.pack_size).min(self.file_size);
         let mut ranges = Vec::new();
         for &(s, e) in &self.ranges {
-            if s >= end { break; }
+            if s >= end {
+                break;
+            }
             if e > base {
                 ranges.push((s.max(base), e.min(end)));
             }
@@ -220,11 +252,15 @@ impl Search {
 }
 
 /// 检查 data[pos..] 是否匹配 nibble 模式
-fn atoms_match(atoms: &[NibAtom], data: &[u8], pos: usize) -> bool {
+pub fn atoms_match(atoms: &[NibAtom], data: &[u8], pos: usize) -> bool {
     atoms.chunks(2).enumerate().all(|(i, pair)| {
         let b = data[pos + i];
         let hi_ok = nib_match(&pair[0], b >> 4);
-        let lo_ok = if pair.len() > 1 { nib_match(&pair[1], b & 0x0f) } else { true };
+        let lo_ok = if pair.len() > 1 {
+            nib_match(&pair[1], b & 0x0f)
+        } else {
+            true
+        };
         hi_ok && lo_ok
     })
 }
@@ -249,17 +285,25 @@ pub enum SearchKind {
 /// 支持格式：纯 hex（如 `4f2a`）、nibble 模式（如 `4x`、`[0-3]f`、`z`）。
 pub fn parse_input(s: &str) -> Option<SearchKind> {
     let t = s.trim();
-    if t.is_empty() { return None; }
+    if t.is_empty() {
+        return None;
+    }
     // pure hex
     let hex: String = t.chars().filter(|c| !c.is_whitespace()).collect();
     if !hex.is_empty() && hex.len() % 2 == 0 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
         if let Some(bytes) = decode_hex(&hex) {
-            return Some(SearchKind::Hex { bytes, label: t.into() });
+            return Some(SearchKind::Hex {
+                bytes,
+                label: t.into(),
+            });
         }
     }
     // x/z/[] nibble pattern
     if let Some(pat) = compile_pat(t) {
-        return Some(SearchKind::Pat { pat, label: t.into() });
+        return Some(SearchKind::Pat {
+            pat,
+            label: t.into(),
+        });
     }
     None
 }
@@ -267,17 +311,24 @@ pub fn parse_input(s: &str) -> Option<SearchKind> {
 /// 解析纯字符串搜索输入，返回 (标签, UTF-8 字节)
 pub fn parse_str_input(s: &str) -> Option<(String, Vec<u8>)> {
     let t = s.trim();
-    if t.is_empty() { return None; }
+    if t.is_empty() {
+        return None;
+    }
     Some((format!("\"{}\"", t), t.as_bytes().to_vec()))
 }
 
 /// 十六进制字符串解码为字节序列
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).ok()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
 }
 
 /// 单个十六进制字符转 nibble 值
-fn hv(c: char) -> Option<u8> { c.to_digit(16).map(|v| v as u8) }
+fn hv(c: char) -> Option<u8> {
+    c.to_digit(16).map(|v| v as u8)
+}
 
 /// 将搜索语法字符串分词为 NibAtom 序列
 ///
@@ -287,7 +338,10 @@ fn tokenize(s: &str) -> Option<Vec<NibAtom>> {
     let mut atoms = Vec::new();
     let mut i = 0;
     while i < ch.len() {
-        if ch[i].is_ascii_whitespace() { i += 1; continue; }
+        if ch[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
         if ch[i] == 'z' {
             atoms.push(NibAtom::Any);
             atoms.push(NibAtom::Any);
@@ -317,7 +371,11 @@ fn tokenize(s: &str) -> Option<Vec<NibAtom>> {
 /// 编译搜索模式：分词后验证 nibble 数量为偶数（每字节 = 2 nibbles）
 fn compile_pat(s: &str) -> Option<Vec<NibAtom>> {
     let atoms = tokenize(s)?;
-    if atoms.is_empty() { return None; }
-    if atoms.len() % 2 != 0 { return None; }
+    if atoms.is_empty() {
+        return None;
+    }
+    if atoms.len() % 2 != 0 {
+        return None;
+    }
     Some(atoms)
 }

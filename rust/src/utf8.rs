@@ -106,7 +106,11 @@ pub fn decode_row(data: &[u8], offset: usize, count: usize, start_pos: usize) ->
         match std::str::from_utf8(&data[offset + i..offset + i + seq_len]) {
             Ok(s) => {
                 let ch = s.chars().next().unwrap();
-                out.push(Segment::Char { pos: i, ch, len: seq_len });
+                out.push(Segment::Char {
+                    pos: i,
+                    ch,
+                    len: seq_len,
+                });
             }
             Err(_) => out.push(Segment::Invalid { pos: i }),
         }
@@ -121,12 +125,23 @@ pub fn decode_row(data: &[u8], offset: usize, count: usize, start_pos: usize) ->
 /// 用于 UTF8 模式下对齐双宽字符的显示。
 pub fn display_width(ch: char) -> usize {
     let cp = ch as u32;
-    if (0x1100..=0x115F).contains(&cp) || cp == 0x2329 || cp == 0x232A
-        || (0x2E80..=0x33FF).contains(&cp) || (0x3400..=0x4DBF).contains(&cp)
-        || (0x4E00..=0x9FFF).contains(&cp) || (0xA000..=0xA4CF).contains(&cp)
-        || (0xAC00..=0xD7AF).contains(&cp) || (0xF900..=0xFAFF).contains(&cp)
-        || (0xFE30..=0xFE6F).contains(&cp) || (0xFF00..=0xFF60).contains(&cp)
-        || (0xFFE0..=0xFFE6).contains(&cp) || (0x1F000..=0x1F9FF).contains(&cp)
+    if (0x1100..=0x115F).contains(&cp)
+        || cp == 0x2329
+        || cp == 0x232A
+        || (0x2E80..=0x33FF).contains(&cp)
+        || (0x3400..=0x4DBF).contains(&cp)
+        || (0x4E00..=0x9FFF).contains(&cp)
+        || (0xA000..=0xA4CF).contains(&cp)
+        || (0xAC00..=0xD7AF).contains(&cp)
+        || (0xF900..=0xFAFF).contains(&cp)
+        || (0xFE30..=0xFE6F).contains(&cp)
+        || (0xFF00..=0xFF60).contains(&cp)
+        || (0xFFE0..=0xFFE6).contains(&cp)
+        || (0x1F000..=0x1F9FF).contains(&cp)
         || (0x20000..=0x2FA1F).contains(&cp)
-    { 2 } else { 1 }
+    {
+        2
+    } else {
+        1
+    }
 }
