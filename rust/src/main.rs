@@ -2856,7 +2856,7 @@ fn draw_save_dialog(f: &mut ratatui::Frame, app: &App, area: Rect) {
 /// 绘制模式选择下拉菜单（从状态栏 [ASCII] 下方展开）
 ///
 /// 包含三个显示模式（ASCII/HEX/UTF8）和颜色模式（None/256/RGB/HSL/GRAY/HEAT/hsl/rgb）。
-/// 颜色模式使用单选按钮（▶）行为，标签背景色匹配对应显示效果。
+/// 颜色模式使用背景色高亮表示选中，标签背景色匹配对应显示效果。
 fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let modes = [
         (DisplayMode::Ascii, "[ASCII]"),
@@ -2907,27 +2907,37 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         (app.is_rgbbit_bg, "rgb ", Some(rgbbit_bg(160))),
     ];
     for (i, (sel, label, bg)) in color_items.iter().enumerate() {
-        let radio = if *sel { "▶" } else { " " };
+        let row_rect = Rect::new(dx, dy + 4 + i as u16, dw, 1);
         let line = if let Some(bg_color) = bg {
             let fg = if color_config::luminance(*bg_color) > 128.0 {
                 Color::Black
             } else {
                 Color::White
             };
-            let label_style = Style::default().bg(*bg_color).fg(fg);
-            Line::from(vec![
-                Span::styled(format!(" {} ", radio), Style::default()),
-                Span::raw(" "),
-                Span::styled(label.to_string(), label_style),
-                Span::raw(" "),
-            ])
+            if *sel {
+                // 选中：整行用该模式的背景色
+                let pad = " ".repeat(dw.saturating_sub(label.len() as u16 + 2) as usize);
+                Line::from(Span::styled(
+                    format!(" {}{} ", label, pad),
+                    Style::default().bg(*bg_color).fg(fg),
+                ))
+            } else {
+                // 未选中：标签有背景色，其余空白
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(label.to_string(), Style::default().bg(*bg_color).fg(fg)),
+                ])
+            }
         } else {
-            Line::from(vec![Span::raw(format!(" {}  {} ", radio, label))])
+            // off 选项（无背景色）
+            if *sel {
+                let pad = " ".repeat(dw.saturating_sub(label.len() as u16 + 2) as usize);
+                Line::from(Span::styled(format!(" {}{} ", label, pad), sp(16)))
+            } else {
+                Line::from(Span::raw(format!(" {} ", label)))
+            }
         };
-        f.render_widget(
-            Paragraph::new(line),
-            Rect::new(dx, dy + 4 + i as u16, dw, 1),
-        );
+        f.render_widget(Paragraph::new(line), row_rect);
     }
 }
 
