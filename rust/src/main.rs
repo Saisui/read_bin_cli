@@ -153,13 +153,14 @@ fn main() -> io::Result<()> {
                 Ok(true) => {
                     // Sample 内存数据 → 直接用，不走文件
                     if let Some(sample) = app.pending_data.take() {
+                        let prev_file = filename.clone();
                         let mut data = sample;
                         let base_name = "sample".to_string();
                         let file_size = data.len();
                         app = App::new(file_size, base_name);
                         let _reopen2 = run(&mut terminal, &mut app, &mut data, "");
-                        // Sample 退出后返回文件浏览器
-                        filename.clear();
+                        // Sample 退出后返回之前的文件
+                        filename = prev_file;
                         continue;
                     }
                     // 文件浏览器或 pending_file
