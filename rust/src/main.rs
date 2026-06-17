@@ -2013,11 +2013,12 @@ fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
     );
     let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
     let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
+    let mut top_style = Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60));
+    if app.dirty {
+        top_style = top_style.add_modifier(ratatui::style::Modifier::ITALIC);
+    }
     f.render_widget(
-        Paragraph::new(Span::styled(
-            top_bar_full,
-            Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60)),
-        )),
+        Paragraph::new(Span::styled(top_bar_full, top_style)),
         Rect::new(0, 0, area.width, 1),
     );
     // 数据区从第 2 行开始（第 0 行顶栏，第 1 行列号头在 build_lines 中）
