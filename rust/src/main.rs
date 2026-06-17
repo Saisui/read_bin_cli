@@ -12,6 +12,7 @@
 mod app;
 mod bitmap;
 mod color_config;
+mod modified;
 mod search;
 mod utf8;
 
@@ -1995,6 +1996,12 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
         dim_style(base)
     } else {
         base
+    };
+    // 编辑过的字节渲染为斜体（Sparse Hierarchical Bitmap O(1) 查询）
+    let s = if app.modified.is_modified(off) {
+        s.add_modifier(ratatui::style::Modifier::ITALIC)
+    } else {
+        s
     };
     resolve_auto_fg(s)
 }

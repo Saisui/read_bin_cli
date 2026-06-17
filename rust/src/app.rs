@@ -95,6 +95,7 @@ pub struct App {
     pub dirty: bool,
     pub undo_stack: Vec<UndoEntry>,
     pub redo_stack: Vec<UndoEntry>,
+    pub modified: crate::modified::ModifiedMap,
     pub search: Option<BitSearch>,
     pub search_active: bool,
     pub search_len: usize,
@@ -139,6 +140,7 @@ impl App {
             dirty: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            modified: crate::modified::ModifiedMap::new(),
             search: None,
             search_active: false,
             search_len: 0,
@@ -359,7 +361,7 @@ impl App {
         }
     }
 
-    /// 修改单字节并记录到撤销栈
+    /// 修改单字节并记录到撤销栈，同时标记到层级位图
     pub fn modify(&mut self, mmap: &mut [u8], off: usize, val: u8) {
         if off < self.file_size && mmap[off] != val {
             self.undo_stack.push(UndoEntry {
@@ -370,6 +372,7 @@ impl App {
             self.redo_stack.clear();
             mmap[off] = val;
             self.dirty = true;
+            self.modified.mark(off);
         }
     }
 
