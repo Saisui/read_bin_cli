@@ -1158,9 +1158,9 @@ fn run(
         // render
         render_frame(terminal, app, mmap)?;
 
-        // handle input（跟踪模式用 poll 超时，每秒检测文件变化）
+        // handle input（跟踪模式：50ms 轮询，20次/秒检测文件变化）
         let evt = if track {
-            if event::poll(std::time::Duration::from_secs(1))? {
+            if event::poll(std::time::Duration::from_millis(50))? {
                 event::read()?
             } else {
                 // 超时：检查文件变化
