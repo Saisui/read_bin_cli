@@ -44,7 +44,7 @@ Display:
   Click [ASCII] Open mode dropdown
 
 Status bar (clickable):
-  @address    Goto byte address
+  &address    Goto byte address
   pack        Goto page number
   Ctrl+H      This help
 

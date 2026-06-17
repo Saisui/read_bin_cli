@@ -1957,7 +1957,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
 ///
 /// 底栏可点击区域：
 /// - [ASCII]/[HEX]/[UTF8] → 模式选择下拉菜单
-/// - @address → 跳转到字节地址
+/// - &address → 跳转到字节地址
 /// - pack → 跳转到指定页
 /// - Ctrl+H:help → 打开帮助窗口
 fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
@@ -1998,15 +1998,19 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 if let Some(ref s) = app.search {
                     let total = s.count;
                     let plus = if s.has_more() { "+" } else { "" };
-                    let cur = app.current_match.map_or(0, |i| i + 1);
+                    // 搜索时显示当前匹配所在的页码
+                    let cur_pack = app
+                        .current_match
+                        .map(|pos| pos / app.pack_size + 1)
+                        .unwrap_or(0);
                     let mut disp = s.label.clone();
                     if disp.len() > 24 {
                         disp.truncate(24);
                         disp.push_str("...");
                     }
                     let status = format!(
-                        "Search: {} [{}/{}{}]  ↑↓:in-pack ←→:global ESC:clear",
-                        disp, cur, total, plus
+                        "Search: {} @{:x}/{:x} [{}{}]  ↑↓:next ESC:clear",
+                        disp, cur_pack, app.total_packs, total, plus
                     );
                     return f.render_widget(
                         Paragraph::new(Span::styled(status, sp(5))),
@@ -2025,7 +2029,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             } else {
                 8
             };
-            let offset_str = format!("@{:0width$x}", app.cursor_byte, width = hex_w);
+            let offset_str = format!("&{:0width$x}", app.cursor_byte, width = hex_w);
             let max_rows = app.max_rows(area.height);
             let last_global_row = (app.global_scroll_top() + max_rows - 1)
                 .min(app.global_total_rows().saturating_sub(1));
