@@ -2897,7 +2897,7 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         && !app.is_hslbit_bg
         && !app.is_rgbbit_bg;
     let color_items: [(bool, &str, Option<Color>); 8] = [
-        (none_sel, "None", None),
+        (none_sel, "off ", None),
         (app.is_color256, "256 ", Some(Color::Indexed(208))),
         (app.is_rgb_bg, "RGB ", Some(Color::Rgb(200, 100, 50))),
         (app.is_hsl_bg, "HSL ", Some(Color::Rgb(100, 200, 150))),
