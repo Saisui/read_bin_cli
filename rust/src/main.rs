@@ -2973,8 +2973,14 @@ fn draw_about(f: &mut ratatui::Frame, area: Rect) {
         "Terminal hex viewer/editor".to_string(),
         "Author: Saisui".to_string(),
         String::new(),
-        "github.com/Saisui/read_bin_cli".to_string(),
+        "Features:".to_string(),
+        "  BitSearch 4-lv bitmap (804B)".to_string(),
+        "  Sparse Hierarchical Bitmap".to_string(),
+        "  8 color modes".to_string(),
+        "  Edit + undo/redo".to_string(),
+        "  Sample file (0x00-0xFF)".to_string(),
         String::new(),
+        "github.com/Saisui/read_bin_cli".to_string(),
         "License: AGPL-3.0".to_string(),
     ];
     let h = text.len() as u16 + 2;

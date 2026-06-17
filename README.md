@@ -151,7 +151,7 @@ The bottom status bar has clickable regions:
 | `[ASCII]` / `[HEX]` / `[UTF8]` | Open mode dropdown |
 | `& 00000042` | Goto byte address |
 | `pack 2/5` | Goto page number |
-| `[MENU]` | Open menu (Help / Sample / About) |
+| `[MENU]` | Open menu — press `h` (Help), `s` (Sample), `a` (About) |
 
 Top bar shows `*filename [size]` when file has unsaved changes (italic).
 
@@ -175,10 +175,14 @@ When 256-color is enabled, the mode label renders with a per-character gradient 
 | `?` / `Ctrl+H` | Show help |
 | Click `[MENU]` | Open menu dropdown |
 
-Menu items:
-- **Help**: Show keybinding help
-- **Sample**: Open a 256-byte sample file (0x00..0xFF) in memory
-- **About**: Version, author, license info
+Menu items (press underlined letter as shortcut):
+- <ins>**H**</ins>elp: Show keybinding help
+- <ins>**S**</ins>ample: Open a 256-byte sample file (0x00..0xFF) in memory
+- <ins>**A**</ins>bout: Version, author, license info
+
+## File Browser
+
+When no file argument is given, a built-in file browser opens. It lists files in the current directory, sorted with `*sample` at the top — a built-in 256-byte sample (0x00..0xFF) that requires no file on disk.
 
 ## Color Configuration
 

@@ -12,7 +12,7 @@
 
 ```
 src/
-├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~3200 行）
+├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~3345 行）
 ├── app.rs           # 应用状态管理（跨页滚动、光标、搜索、undo/redo）
 ├── bitmap.rs        # 四级位图搜索引擎（L0~L3，804 字节固定内存）
 ├── modified.rs      # Sparse Hierarchical Bitmap（稀疏层级位图，追踪编辑字节）
@@ -83,6 +83,12 @@ main.rs
 - `SearchInput` / `GotoInput` / `GotoByteInput` → `handle_input()`：文本输入
 - `SaveConfirm` → `handle_save()`：y/n 确认
 - `Help` / `Menu` / `About` / `ModeSelect`：各自 ESC 关闭
+- `FileBrowser`：文件浏览器模式（Enter 打开文件/目录，ESC 关闭）
+
+**Menu 模式快捷键**：
+- `h`：打开帮助（Help）
+- `s`：打开 Sample（*sample 入口，加载演示数据）
+- `a`：打开关于（About）
 
 ### 渲染（1100-1600）
 - `sp(n)`：编号 → 样式映射
@@ -93,9 +99,9 @@ main.rs
 
 ### 底栏点击区域
 ```
-[ASCII]  & 1a3f  pack 2/5  Ctrl+H:help
-  ↑         ↑        ↑           ↑
-  模式菜单  跳转字节  跳转页      帮助
+[ASCII]  & 1a3f  pack 2/5  Ctrl+H:help  [MENU]
+  ↑         ↑        ↑           ↑          ↑
+  模式菜单  跳转字节  跳转页      帮助       菜单
 ```
 
 搜索时：
@@ -107,7 +113,7 @@ Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 
 ### 枚举
 - `DisplayMode`：Ascii / Hex / Utf8（含 `next()` / `prev()`）
-- `InputMode`：Normal / Edit / SearchInput / GotoInput / GotoByteInput / StringSearchInput / SaveConfirm / Help / ModeSelect
+- `InputMode`：Normal / Edit / SearchInput / GotoInput / GotoByteInput / StringSearchInput / SaveConfirm / Help / ModeSelect / Menu / About / FileBrowser
 
 ### App 核心字段
 - 分页：`file_size`, `pack_size`(4096), `total_packs`, `current_pack`, `scroll_top`
@@ -116,7 +122,7 @@ Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 - 编辑：`undo_stack`, `redo_stack`, `dirty`, `modified`(ModifiedMap), `original_values`(HashMap)
 - 选区：`sel_start`, `sel_end`, `dragging`
 - 显示：`is_color256`, `is_rgb_bg`, `is_hsl_bg`, `is_gray_bg`, `is_heat_bg`, `is_hslbit_bg`, `is_rgbbit_bg`
-- 菜单：`pending_ctrl_k`, `pending_file`, `pending_data`, `menu_selected`
+- 菜单：`pending_ctrl_k`, `pending_file`, `menu_selected`
 
 ### 跨页滚动方法
 - `global_total_rows()`：文件总行数
@@ -169,6 +175,8 @@ L1: 每 1MB 1 bit    → 快速跳过空 MB
 L2: 每 1GB 1 bit    → 快速跳过空 GB
 ```
 
+⚠️ **Dead Code**：search.rs 中的旧 `Search` 结构体已废弃，被 bitmap.rs 的 `BitSearch` 替代。`Needle` 枚举仍在使用。
+
 ### 搜索语法
 ```
 4f2a        → 精确 hex
@@ -191,7 +199,7 @@ L0: 512B — 当前 4K 页内 4096 字节的存在性
 - `scan_chunk()`：按需扫描 1MB，标记匹配到位图
 - `next_match_after()` / `prev_match_before()`：位图下降查找下一个/上一个匹配
 - `matches_at()`：检查指定位置是否匹配
-- `pack_matches()`：获取指定 pack 内的匹配范围（供渲染高亮）
+- `pack_matches()`：获取指定 pack 内的匹配范围（供渲染高亮）（⚠️ dead code，未使用）
 - `ensure_cached()` / `ensure_mb_cached()`：切换区域时重建 L0/L1 缓存
 
 ### 位操作
@@ -233,6 +241,16 @@ L0: HashMap<usize, [u8; 512]>    每个有编辑的 4K 页分配 512B
 - `ByteClass`：字节类型（Ascii/Tail/Duo/Trio/Quo/Invalid）
 - `decode_row()`：行级 UTF-8 解码，处理跨行序列
 - `display_width()`：CJK 等宽字符 width=2
+
+## FileBrowser（main.rs 内）
+
+### 关键函数
+- `run_file_browser_only()`：独立文件浏览器入口（`Ctrl+P` 触发），覆盖整个终端
+- `draw_file_browser()`：渲染文件浏览器 UI（目录列表 + 路径栏 + 快捷键提示）
+- `*sample`：Menu 中 `s` 快捷键触发，加载演示/示例数据
+
+### 工作模式
+文件浏览器有独立的事件循环，不依赖 App 状态。打开文件后返回到主界面。
 
 ## 编辑规范
 
