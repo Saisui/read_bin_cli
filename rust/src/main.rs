@@ -131,7 +131,6 @@ fn main() -> io::Result<()> {
             }
 
             let mmap = unsafe { Mmap::map(&file)? };
-            let mut data = mmap[..file_size].to_vec();
 
             // 首次加载颜色配置，后续调用忽略（OnceLock 已设置）
             let _ = init_colors(std::path::Path::new("color.yaml"));
@@ -148,7 +147,7 @@ fn main() -> io::Result<()> {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| filename.clone());
             let mut app = App::new(file_size, base_name);
-            let reopen = run(&mut terminal, &mut app, &mut data, &filename);
+            let reopen = run(&mut terminal, &mut app, &mmap, &filename);
 
             match reopen {
                 Ok(true) => {
@@ -191,37 +190,37 @@ fn main() -> io::Result<()> {
 fn render_frame(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &App,
-    data: &[u8],
+    mmap: &[u8],
 ) -> io::Result<()> {
     terminal.draw(|f| {
         let area = f.area();
         match app.input_mode {
             InputMode::Help => {
-                draw_hex(f, app, data, area);
+                draw_hex(f, app, mmap, area);
                 draw_help(f, app, area);
             }
             InputMode::SaveConfirm => {
-                draw_hex(f, app, data, area);
+                draw_hex(f, app, mmap, area);
                 draw_save_dialog(f, app, area);
             }
             InputMode::ModeSelect => {
-                draw_hex(f, app, data, area);
-                draw_status(f, app, data, area);
+                draw_hex(f, app, mmap, area);
+                draw_status(f, app, mmap, area);
                 draw_mode_dropdown(f, app, area);
             }
             InputMode::Menu => {
-                draw_hex(f, app, data, area);
-                draw_status(f, app, data, area);
+                draw_hex(f, app, mmap, area);
+                draw_status(f, app, mmap, area);
                 draw_menu_dropdown(f, app, area);
             }
             InputMode::About => {
-                draw_hex(f, app, data, area);
-                draw_status(f, app, data, area);
+                draw_hex(f, app, mmap, area);
+                draw_status(f, app, mmap, area);
                 draw_about(f, area);
             }
             _ => {
-                draw_hex(f, app, data, area);
-                draw_status(f, app, data, area);
+                draw_hex(f, app, mmap, area);
+                draw_status(f, app, mmap, area);
             }
         }
     })?;
@@ -559,7 +558,7 @@ fn handle_mouse_event(
 fn handle_key_event(
     app: &mut App,
     key: crossterm::event::KeyEvent,
-    data: &mut [u8],
+    mmap: &[u8],
     filename: &str,
     th: u16,
     max_rows: usize,
@@ -579,7 +578,7 @@ fn handle_key_event(
         app.pending_ctrl_k = false;
         match key.code {
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                app.restore_at(data, app.cursor_byte);
+                app.restore_at(mmap, app.cursor_byte);
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 app.input_mode = InputMode::Menu;
@@ -597,12 +596,12 @@ fn handle_key_event(
         match key.code {
             KeyCode::Char('z') => {
                 // 撤销
-                app.undo(data);
+                app.undo(mmap);
                 return;
             }
             KeyCode::Char('y') => {
                 // 重做
-                app.redo(data);
+                app.redo(mmap);
                 return;
             }
             KeyCode::Char('q') => {
@@ -627,7 +626,7 @@ fn handle_key_event(
                 return;
             }
             KeyCode::Char('s') => {
-                let _ = std::fs::write(filename, &*data);
+                let _ = save_with_overlay(mmap, app, filename);
                 app.dirty = false;
                 return;
             }
@@ -642,8 +641,8 @@ fn handle_key_event(
                     } else {
                         (end, start)
                     };
-                    let len = (hi - lo + 1).min(data.len() - lo);
-                    let selected = &data[lo..lo + len];
+                    let len = (hi - lo + 1).min(app.file_size - lo);
+                    let selected: Vec<u8> = (lo..lo + len).map(|i| app.byte_at(mmap, i)).collect();
                     let text = match app.mode {
                         DisplayMode::Ascii => selected
                             .iter()
@@ -673,7 +672,7 @@ fn handle_key_event(
                             .collect::<Vec<_>>()
                             .join(" "),
                         DisplayMode::Utf8 => {
-                            let segs = crate::utf8::decode_row(data, lo, len, 0);
+                            let segs = crate::utf8::decode_row(&selected, 0, len, 0);
                             segs.iter()
                                 .filter_map(|seg| {
                                     if let crate::utf8::Segment::Char { ch, .. } = seg {
@@ -751,18 +750,18 @@ fn handle_key_event(
             // Alt+↑/↓：字节值 ±1（编辑模式微调）
             KeyCode::Up => {
                 if app.input_mode == InputMode::Edit && app.cursor_byte < app.file_size {
-                    let val = data[app.cursor_byte];
+                    let val = app.byte_at(mmap, app.cursor_byte);
                     if val < 0xFF {
-                        app.modify(data, app.cursor_byte, val + 1);
+                        app.modify(mmap, app.cursor_byte, val + 1);
                     }
                 }
                 return;
             }
             KeyCode::Down => {
                 if app.input_mode == InputMode::Edit && app.cursor_byte < app.file_size {
-                    let val = data[app.cursor_byte];
+                    let val = app.byte_at(mmap, app.cursor_byte);
                     if val > 0x00 {
-                        app.modify(data, app.cursor_byte, val - 1);
+                        app.modify(mmap, app.cursor_byte, val - 1);
                     }
                 }
                 return;
@@ -965,15 +964,15 @@ fn handle_key_event(
         InputMode::FileBrowser => {
             app.input_mode = InputMode::Normal;
         }
-        InputMode::SaveConfirm => handle_save(app, key.code, data, filename, should_break),
+        InputMode::SaveConfirm => handle_save(app, key.code, mmap, filename, should_break),
         InputMode::SearchInput
         | InputMode::StringSearchInput
         | InputMode::GotoInput
         | InputMode::GotoByteInput => {
-            handle_input(app, key.code, data, th);
+            handle_input(app, key.code, mmap, th);
         }
-        InputMode::Edit => handle_edit(app, key.code, data, th),
-        InputMode::Normal => handle_normal(app, key.code, data, th, max_rows, should_break),
+        InputMode::Edit => handle_edit(app, key.code, mmap, th),
+        InputMode::Normal => handle_normal(app, key.code, mmap, th, max_rows, should_break),
     }
 }
 
@@ -981,7 +980,7 @@ fn handle_key_event(
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
-    data: &mut [u8],
+    mmap: &[u8],
     filename: &str,
 ) -> io::Result<bool> {
     #[cfg(target_os = "windows")]
@@ -1023,7 +1022,7 @@ fn run(
         }
 
         // render
-        render_frame(terminal, app, data)?;
+        render_frame(terminal, app, mmap)?;
 
         // handle input
         let evt = event::read()?;
@@ -1052,7 +1051,7 @@ fn run(
                 handle_key_event(
                     app,
                     key,
-                    data,
+                    mmap,
                     filename,
                     th,
                     max_rows,
@@ -1066,8 +1065,33 @@ fn run(
     Ok(reopen_browser || app.pending_file.is_some())
 }
 
+/// 将 mmap + overlay 写入文件
+///
+/// 无编辑时直接写 mmap，有编辑时按 overlay 逐段拼接写入。
+fn save_with_overlay(mmap: &[u8], app: &App, filename: &str) -> io::Result<()> {
+    if app.overlay.is_empty() {
+        return std::fs::write(filename, mmap);
+    }
+    let mut f = std::fs::File::create(filename)?;
+    let mut sorted: Vec<usize> = app.overlay.keys().copied().collect();
+    sorted.sort_unstable();
+    let mut pos = 0usize;
+    use std::io::Write;
+    for &off in &sorted {
+        if off > pos {
+            f.write_all(&mmap[pos..off])?;
+        }
+        f.write_all(&[app.overlay[&off]])?;
+        pos = off + 1;
+    }
+    if pos < mmap.len() {
+        f.write_all(&mmap[pos..])?;
+    }
+    Ok(())
+}
+
 /// 保存确认弹窗的输入处理（y/n/space/esc）
-fn handle_save(app: &mut App, code: KeyCode, data: &mut [u8], filename: &str, do_break: &mut bool) {
+fn handle_save(app: &mut App, code: KeyCode, mmap: &[u8], filename: &str, do_break: &mut bool) {
     match code {
         KeyCode::Left | KeyCode::Char('h') => {
             app.save_selected = !app.save_selected;
@@ -1076,7 +1100,7 @@ fn handle_save(app: &mut App, code: KeyCode, data: &mut [u8], filename: &str, do
             app.save_selected = !app.save_selected;
         }
         KeyCode::Char('y') | KeyCode::Char('Y') => {
-            let _ = std::fs::write(filename, &*data);
+            let _ = save_with_overlay(mmap, app, filename);
             app.dirty = false;
             *do_break = true;
         }
@@ -1085,7 +1109,7 @@ fn handle_save(app: &mut App, code: KeyCode, data: &mut [u8], filename: &str, do
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
             if app.save_selected {
-                let _ = std::fs::write(filename, &*data);
+                let _ = save_with_overlay(mmap, app, filename);
                 app.dirty = false;
             }
             *do_break = true;
@@ -1095,7 +1119,7 @@ fn handle_save(app: &mut App, code: KeyCode, data: &mut [u8], filename: &str, do
 }
 
 /// 文本输入模式处理（搜索/跳转输入框）
-fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
+fn handle_input(app: &mut App, code: KeyCode, mmap: &[u8], th: u16) {
     match code {
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
@@ -1112,7 +1136,7 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                         let target = val.saturating_sub(1);
                         if target < app.total_packs {
                             if app.search_active {
-                                app.next_global(data, th);
+                                app.next_global(mmap, th);
                             } else {
                                 app.current_pack = target;
                                 app.scroll_top = 0;
@@ -1127,7 +1151,7 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                     if let Some(val) = parse_hex_input(&buf) {
                         if val < app.file_size {
                             if app.search_active {
-                                app.next_global(data, th);
+                                app.next_global(mmap, th);
                             } else {
                                 app.current_pack = val / app.pack_size;
                                 app.scroll_top = (val % app.pack_size) / 16;
@@ -1141,7 +1165,7 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                 InputMode::StringSearchInput => {
                     if let Some((label, bytes)) = search::parse_str_input(&buf) {
                         let len = bytes.len();
-                        app.apply_search(crate::search::Needle::Lit(bytes), len, label, data, th);
+                        app.apply_search(crate::search::Needle::Lit(bytes), len, label, mmap, th);
                     }
                 }
                 InputMode::SearchInput => {
@@ -1156,7 +1180,7 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
                                 (crate::search::Needle::Pat(pat), len, label)
                             }
                         };
-                        app.apply_search(needle, needle_len, label, data, th);
+                        app.apply_search(needle, needle_len, label, mmap, th);
                     }
                 }
                 _ => {}
@@ -1176,7 +1200,7 @@ fn handle_input(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
 ///
 /// 所有光标移动后调用 ensure_cursor_visible 防止越界。
 /// 额外 clamp 确保 cursor_byte 在文件范围内。
-fn handle_edit(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
+fn handle_edit(app: &mut App, code: KeyCode, mmap: &[u8], th: u16) {
     match code {
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
@@ -1268,23 +1292,23 @@ fn handle_edit(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
         }
         KeyCode::Enter => {
             if app.mode == DisplayMode::Ascii {
-                app.edit_char(data, '\n');
+                app.edit_char(mmap, '\n');
             }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Tab => {
             if app.mode == DisplayMode::Ascii {
-                app.edit_char(data, '\t');
+                app.edit_char(mmap, '\t');
             }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Char(c) => {
             if app.mode == DisplayMode::Hex {
                 if c.is_ascii_hexdigit() {
-                    app.edit_hex(data, c);
+                    app.edit_hex(mmap, c);
                 }
             } else {
-                app.edit_char(data, c);
+                app.edit_char(mmap, c);
             }
             app.ensure_cursor_visible(th);
         }
@@ -1300,7 +1324,7 @@ fn handle_edit(app: &mut App, code: KeyCode, data: &mut [u8], th: u16) {
 fn handle_normal(
     app: &mut App,
     code: KeyCode,
-    data: &mut [u8],
+    mmap: &[u8],
     th: u16,
     max_rows: usize,
     do_break: &mut bool,
@@ -1374,7 +1398,7 @@ fn handle_normal(
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if app.search_active {
-                app.prev_global(data, th);
+                app.prev_global(mmap, th);
             } else {
                 let gs = app.global_scroll_top();
                 if gs > 0 {
@@ -1384,7 +1408,7 @@ fn handle_normal(
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.search_active {
-                app.next_global(data, th);
+                app.next_global(mmap, th);
             } else {
                 let gs = app.global_scroll_top();
                 let max = app.global_total_rows().saturating_sub(max_rows);
@@ -1397,7 +1421,7 @@ fn handle_normal(
         KeyCode::Left | KeyCode::Char('h') => {
             if app.search_active {
                 let target = app.current_pack.saturating_sub(1);
-                app.jump_to_page_match_prev(target, data, th);
+                app.jump_to_page_match_prev(target, mmap, th);
             } else if app.current_pack > 0 {
                 app.current_pack -= 1;
                 app.scroll_top = 0;
@@ -1406,7 +1430,7 @@ fn handle_normal(
         KeyCode::Right | KeyCode::Char('l') => {
             if app.search_active {
                 let target = (app.current_pack + 1).min(app.total_packs - 1);
-                app.jump_to_page_match(target, data, th);
+                app.jump_to_page_match(target, mmap, th);
             } else if app.current_pack + 1 < app.total_packs {
                 app.current_pack += 1;
                 app.scroll_top = 0;
@@ -1417,7 +1441,7 @@ fn handle_normal(
                 // K = 上翻一屏 → 回退 max_rows 个 pack
                 let packs_per_screen = (max_rows * 16 / app.pack_size).max(1);
                 let target = app.current_pack.saturating_sub(packs_per_screen);
-                app.jump_to_page_match_prev(target, data, th);
+                app.jump_to_page_match_prev(target, mmap, th);
             } else {
                 let gs = app.global_scroll_top();
                 app.set_global_scroll(gs.saturating_sub(max_rows));
@@ -1427,7 +1451,7 @@ fn handle_normal(
             if app.search_active {
                 let packs_per_screen = (max_rows * 16 / app.pack_size).max(1);
                 let target = (app.current_pack + packs_per_screen).min(app.total_packs - 1);
-                app.jump_to_page_match(target, data, th);
+                app.jump_to_page_match(target, mmap, th);
             } else {
                 let gs = app.global_scroll_top();
                 let max = app.global_total_rows().saturating_sub(max_rows);
@@ -1437,7 +1461,7 @@ fn handle_normal(
         KeyCode::Char('H') => {
             if app.search_active {
                 let target = app.current_pack.saturating_sub(16);
-                app.jump_to_page_match_prev(target, data, th);
+                app.jump_to_page_match_prev(target, mmap, th);
             } else {
                 let target = app.current_pack.saturating_sub(16);
                 app.current_pack = target;
@@ -1447,7 +1471,7 @@ fn handle_normal(
         KeyCode::Char('L') => {
             if app.search_active {
                 let target = (app.current_pack + 16).min(app.total_packs - 1);
-                app.jump_to_page_match(target, data, th);
+                app.jump_to_page_match(target, mmap, th);
             } else {
                 let target = (app.current_pack + 16).min(app.total_packs - 1);
                 app.current_pack = target;
@@ -1459,7 +1483,7 @@ fn handle_normal(
                 let step = (max_rows / 2).max(1);
                 let packs = (step * 16 / app.pack_size).max(1);
                 let target = app.current_pack.saturating_sub(packs);
-                app.jump_to_page_match_prev(target, data, th);
+                app.jump_to_page_match_prev(target, mmap, th);
             } else {
                 let step = (max_rows / 2).max(1);
                 let gs = app.global_scroll_top();
@@ -1471,7 +1495,7 @@ fn handle_normal(
                 let step = (max_rows / 2).max(1);
                 let packs = (step * 16 / app.pack_size).max(1);
                 let target = (app.current_pack + packs).min(app.total_packs - 1);
-                app.jump_to_page_match(target, data, th);
+                app.jump_to_page_match(target, mmap, th);
             } else {
                 let step = (max_rows / 2).max(1);
                 let gs = app.global_scroll_top();
@@ -1483,7 +1507,7 @@ fn handle_normal(
             if app.search_active {
                 // Home → 第一个匹配
                 app.current_match = None;
-                app.next_global(data, th);
+                app.next_global(mmap, th);
             } else {
                 app.current_pack = 0;
                 app.scroll_top = 0;
@@ -1491,7 +1515,7 @@ fn handle_normal(
         }
         KeyCode::Char('O') | KeyCode::Char('o') => {
             if app.search_active {
-                app.prev_global(data, th);
+                app.prev_global(mmap, th);
             } else {
                 let gs = app.global_scroll_top();
                 let step = 256 * (app.pack_size / 16);
@@ -1500,7 +1524,7 @@ fn handle_normal(
         }
         KeyCode::Char('P') | KeyCode::Char('p') => {
             if app.search_active {
-                app.next_global(data, th);
+                app.next_global(mmap, th);
             } else {
                 let gs = app.global_scroll_top();
                 let step = 256 * (app.pack_size / 16);
@@ -1816,17 +1840,21 @@ fn dim_bg_10pct(s: Style) -> Style {
 /// RGB 背景色：R=prev, G=self, B=next
 ///
 /// 边界处理：无 prev 取 off+16，无 next 取 off-16。
-fn rgb_bg(data: &[u8], off: usize, file_size: usize) -> Color {
+fn rgb_bg(app: &App, mmap: &[u8], off: usize, file_size: usize) -> Color {
     let r = if off > 0 {
-        data[off - 1]
+        app.byte_at(mmap, off - 1)
+    } else if off + 16 < file_size {
+        app.byte_at(mmap, off + 16)
     } else {
-        data.get(off + 16).copied().unwrap_or(0)
+        0
     };
-    let g = data[off];
+    let g = app.byte_at(mmap, off);
     let b = if off + 1 < file_size {
-        data[off + 1]
+        app.byte_at(mmap, off + 1)
+    } else if off + 16 < file_size {
+        app.byte_at(mmap, off + 16)
     } else {
-        data.get(off + 16).copied().unwrap_or(0)
+        0
     };
     Color::Rgb(r, g, b)
 }
@@ -1862,17 +1890,21 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
 /// 计算 HSL 背景色：H=prev, L=self, S=next
 ///
 /// 边界处理同 rgb_bg。H 映射 0~360°，L/S 映射 0~100%。
-fn hsl_bg(data: &[u8], off: usize, file_size: usize) -> Color {
+fn hsl_bg(app: &App, mmap: &[u8], off: usize, file_size: usize) -> Color {
     let b1 = if off > 0 {
-        data[off - 1]
+        app.byte_at(mmap, off - 1)
+    } else if off + 16 < file_size {
+        app.byte_at(mmap, off + 16)
     } else {
-        data.get(off + 16).copied().unwrap_or(0)
+        0
     };
-    let b2 = data[off];
+    let b2 = app.byte_at(mmap, off);
     let b3 = if off + 1 < file_size {
-        data[off + 1]
+        app.byte_at(mmap, off + 1)
+    } else if off + 16 < file_size {
+        app.byte_at(mmap, off + 16)
     } else {
-        data.get(off + 16).copied().unwrap_or(0)
+        0
     };
     let h = b1 as f64 * 360.0 / 255.0;
     let l = b2 as f64 / 255.0;
@@ -2044,7 +2076,7 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
 
 /// 绘制主视图（hex/ascii/utf8 内容区）
 /// 绘制顶栏（文件名 + 大小）和主视图
-fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
+fn draw_hex(f: &mut ratatui::Frame, app: &App, mmap: &[u8], area: Rect) {
     // 顶栏：*文件名 [大小]
     let size_str = App::format_size(app.file_size);
     let dirty_prefix = if app.dirty { "*" } else { "" };
@@ -2066,7 +2098,7 @@ fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
     );
     // 数据区从第 2 行开始（第 0 行顶栏，第 1 行列号头在 build_lines 中）
     let data_area = Rect::new(0, 1, area.width, area.height.saturating_sub(2));
-    let lines = build_lines(app, data_full, data_area);
+    let lines = build_lines(app, mmap, data_area);
     f.render_widget(Paragraph::new(lines), data_area);
 }
 
@@ -2076,7 +2108,7 @@ fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
 /// 支持滚过页边界时无缝渲染相邻页数据。
 /// UTF8 模式下处理跨行多字节序列（tail bytes spill）。
 /// 相同类型连续字节交替 dim 增强可读性。
-fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
+fn build_lines<'a>(app: &App, mmap: &[u8], area: Rect) -> Vec<Line<'a>> {
     let mut lines: Vec<Line<'a>> = Vec::new();
 
     // gradient header
@@ -2103,10 +2135,17 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
     let _rows_per_pack = app.pack_size / 16;
 
     let mut cross_row_tail: usize = 0;
+    let mut cached_pack_idx: usize = usize::MAX;
+    let mut cached_pack_data: Vec<u8> = Vec::new();
     for gi in global_start..global_end {
         let (pack_idx, row_in_pack) = app.global_to_local(gi);
         let base_off = pack_idx * app.pack_size;
-        let data = &data_full[base_off..(base_off + app.pack_size).min(data_full.len())];
+        if pack_idx != cached_pack_idx {
+            let pack_end = (base_off + app.pack_size).min(app.file_size);
+            cached_pack_data = (base_off..pack_end).map(|i| app.byte_at(mmap, i)).collect();
+            cached_pack_idx = pack_idx;
+        }
+        let data: &[u8] = &cached_pack_data;
         let off = row_in_pack * 16;
         let rem = 16.min(data.len().saturating_sub(off));
 
@@ -2144,7 +2183,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 let go = base_off + p;
                 let tail_b = data[p];
                 let ts = if app.is_rgb_bg {
-                    let bg = rgb_bg(data_full, go, app.file_size);
+                    let bg = rgb_bg(app, mmap, go, app.file_size);
                     let fg = if color_config::luminance(bg) > 128.0 {
                         Color::Black
                     } else {
@@ -2152,7 +2191,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     };
                     resolve(app, go, Style::default().bg(bg).fg(fg), mr)
                 } else if app.is_hsl_bg {
-                    let bg = hsl_bg(data_full, go, app.file_size);
+                    let bg = hsl_bg(app, mmap, go, app.file_size);
                     let fg = if color_config::luminance(bg) > 128.0 {
                         Color::Black
                     } else {
@@ -2245,7 +2284,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         }
                         let dim = same_count % 2 == 1;
                         let base = if app.is_rgb_bg {
-                            let bg = rgb_bg(data_full, go, app.file_size);
+                            let bg = rgb_bg(app, mmap, go, app.file_size);
                             let fg = if color_config::luminance(bg) > 128.0 {
                                 Color::Black
                             } else {
@@ -2275,7 +2314,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             let cgo = base_off + off + pos + ci;
                             let tail_b = data[off + pos + ci];
                             let ts = if app.is_rgb_bg {
-                                let bg = rgb_bg(data_full, cgo, app.file_size);
+                                let bg = rgb_bg(app, mmap, cgo, app.file_size);
                                 let fg = if color_config::luminance(bg) > 128.0 {
                                     Color::Black
                                 } else {
@@ -2283,7 +2322,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                                 };
                                 resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
                             } else if app.is_hsl_bg {
-                                let bg = hsl_bg(data_full, cgo, app.file_size);
+                                let bg = hsl_bg(app, mmap, cgo, app.file_size);
                                 let fg = if color_config::luminance(bg) > 128.0 {
                                     Color::Black
                                 } else {
@@ -2345,7 +2384,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let go = base_off + bo;
                         let b = data[bo];
                         let base = if app.is_rgb_bg {
-                            let bg = rgb_bg(data_full, go, app.file_size);
+                            let bg = rgb_bg(app, mmap, go, app.file_size);
                             let fg = if color_config::luminance(bg) > 128.0 {
                                 Color::Black
                             } else {
@@ -2353,7 +2392,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             };
                             Style::default().bg(bg).fg(fg)
                         } else if app.is_hsl_bg {
-                            let bg = hsl_bg(data_full, go, app.file_size);
+                            let bg = hsl_bg(app, mmap, go, app.file_size);
                             let fg = if color_config::luminance(bg) > 128.0 {
                                 Color::Black
                             } else {
@@ -2428,7 +2467,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                 if app.input_mode == InputMode::Edit && app.cursor_byte == go {
                     let d = byte_disp(b, app.mode);
                     let non_cursor_style = if app.is_rgb_bg {
-                        let bg = rgb_bg(data_full, go, app.file_size);
+                        let bg = rgb_bg(app, mmap, go, app.file_size);
                         let fg = if color_config::luminance(bg) > 128.0 {
                             Color::Black
                         } else {
@@ -2436,7 +2475,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         };
                         Style::default().bg(bg).fg(fg)
                     } else if app.is_hsl_bg {
-                        let bg = hsl_bg(data_full, go, app.file_size);
+                        let bg = hsl_bg(app, mmap, go, app.file_size);
                         let fg = if color_config::luminance(bg) > 128.0 {
                             Color::Black
                         } else {
@@ -2505,7 +2544,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     continue;
                 }
                 let base = if app.is_rgb_bg {
-                    let bg = rgb_bg(data_full, go, app.file_size);
+                    let bg = rgb_bg(app, mmap, go, app.file_size);
                     let fg = if color_config::luminance(bg) > 128.0 {
                         Color::Black
                     } else {
@@ -2513,7 +2552,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     };
                     Style::default().bg(bg).fg(fg)
                 } else if app.is_hsl_bg {
-                    let bg = hsl_bg(data_full, go, app.file_size);
+                    let bg = hsl_bg(app, mmap, go, app.file_size);
                     let fg = if color_config::luminance(bg) > 128.0 {
                         Color::Black
                     } else {

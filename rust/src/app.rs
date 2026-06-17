@@ -95,6 +95,7 @@ pub struct App {
     pub dirty: bool,
     pub undo_stack: Vec<UndoEntry>,
     pub redo_stack: Vec<UndoEntry>,
+    pub overlay: std::collections::HashMap<usize, u8>,
     pub modified: crate::modified::ModifiedMap,
     pub original_values: std::collections::HashMap<usize, u8>,
     pub pending_ctrl_k: bool,
@@ -141,6 +142,7 @@ impl App {
             dirty: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            overlay: std::collections::HashMap::new(),
             modified: crate::modified::ModifiedMap::new(),
             original_values: std::collections::HashMap::new(),
             pending_ctrl_k: false,
@@ -366,48 +368,61 @@ impl App {
     /// 修改单字节并记录到撤销栈，同时标记到层级位图
     ///
     /// 首次编辑某字节时，将其原始值存入 original_values。
-    pub fn modify(&mut self, mmap: &mut [u8], off: usize, val: u8) {
-        if off < self.file_size && mmap[off] != val {
+    pub fn byte_at(&self, mmap: &[u8], off: usize) -> u8 {
+        self.overlay.get(&off).copied().unwrap_or(mmap[off])
+    }
+
+    pub fn modify(&mut self, mmap: &[u8], off: usize, val: u8) {
+        if off < self.file_size && self.byte_at(mmap, off) != val {
             // 首次编辑：存原始值
-            self.original_values.entry(off).or_insert(mmap[off]);
+            let cur = self.byte_at(mmap, off);
+            self.original_values.entry(off).or_insert(cur);
             self.undo_stack.push(UndoEntry {
                 offset: off,
-                old: mmap[off],
+                old: cur,
                 new: val,
             });
             self.redo_stack.clear();
-            mmap[off] = val;
+            self.overlay.insert(off, val);
             self.dirty = true;
             self.modified.mark(off);
         }
     }
 
     /// 还原指定字节到原始值（不影响 undo/redo 栈）
-    pub fn restore_at(&mut self, mmap: &mut [u8], off: usize) {
+    pub fn restore_at(&mut self, mmap: &[u8], off: usize) {
         if let Some(orig) = self.original_values.remove(&off) {
             if off < self.file_size {
-                mmap[off] = orig;
+                if mmap[off] == orig {
+                    self.overlay.remove(&off);
+                } else {
+                    self.overlay.insert(off, orig);
+                }
             }
             self.modified.unmark(off);
         }
     }
 
     /// 撤销上一次修改
-    pub fn undo(&mut self, mmap: &mut [u8]) {
+    pub fn undo(&mut self, mmap: &[u8]) {
         if let Some(e) = self.undo_stack.pop() {
             if e.offset < self.file_size {
-                mmap[e.offset] = e.old;
+                if mmap[e.offset] == e.old {
+                    self.overlay.remove(&e.offset);
+                } else {
+                    self.overlay.insert(e.offset, e.old);
+                }
                 self.redo_stack.push(e);
-                self.dirty = !self.undo_stack.is_empty();
+                self.dirty = !self.undo_stack.is_empty() || !self.overlay.is_empty();
             }
         }
     }
 
     /// 重做上一次撤销
-    pub fn redo(&mut self, mmap: &mut [u8]) {
+    pub fn redo(&mut self, _mmap: &[u8]) {
         if let Some(e) = self.redo_stack.pop() {
             if e.offset < self.file_size {
-                mmap[e.offset] = e.new;
+                self.overlay.insert(e.offset, e.new);
                 self.undo_stack.push(e);
                 self.dirty = true;
             }
@@ -417,7 +432,7 @@ impl App {
     /// HEX 模式下编辑半字节（nibble）
     ///
     /// 输入一个 hex 字符，替换当前 nibble，然后自动前进到下一个 nibble/字节。
-    pub fn edit_hex(&mut self, mmap: &mut [u8], ch: char) {
+    pub fn edit_hex(&mut self, mmap: &[u8], ch: char) {
         let nib = match ch {
             '0'..='9' => ch as u8 - b'0',
             'a'..='f' => ch as u8 - b'a' + 10,
@@ -427,7 +442,7 @@ impl App {
         if self.cursor_byte >= self.file_size {
             return;
         }
-        let cur = mmap[self.cursor_byte];
+        let cur = self.byte_at(mmap, self.cursor_byte);
         let new = if self.cursor_nibble == 0 {
             (cur & 0x0f) | (nib << 4)
         } else {
@@ -449,7 +464,7 @@ impl App {
     /// ASCII/UTF8 模式下编辑字符
     ///
     /// 将字符编码为 UTF-8 字节序列，逐字节写入并推进光标。
-    pub fn edit_char(&mut self, mmap: &mut [u8], ch: char) {
+    pub fn edit_char(&mut self, mmap: &[u8], ch: char) {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         for &b in s.as_bytes() {
