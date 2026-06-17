@@ -4,6 +4,12 @@ Terminal TUI hex viewer / editor written in Rust.
 
 **Dependencies**: ratatui (TUI framework), crossterm (terminal control), memmap2 (memory-mapped files), arboard (clipboard)
 
+### Architecture Highlights
+
+- **Four-level bitmap search** (BitSearch): 804-byte fixed memory for search indexing, on-demand scanning
+- **Sparse Hierarchical Bitmap** (invented by Saisui): tracks edited bytes with 4K→1MB→1GB→1TB hierarchy, O(1) query, memory proportional to edit count not file size
+- Edited bytes render in **italics** for visual distinction
+
 ## Usage
 
 ```bash
@@ -108,6 +114,7 @@ Press `i` to enter edit mode. Press `ESC` to exit.
 | `Alt`+`↓` | Byte value -1 (at 0x00: no change) |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
+| `Ctrl+K, R` | Restore cursor byte to original value |
 
 ## Selection
 
@@ -142,9 +149,11 @@ The bottom status bar has clickable regions:
 | Region | Action |
 |--------|--------|
 | `[ASCII]` / `[HEX]` / `[UTF8]` | Open mode dropdown |
-| `&00000042` | Goto byte address |
+| `& 00000042` | Goto byte address |
 | `pack 2/5` | Goto page number |
-| `Ctrl+H:help` | Open help |
+| `[MENU]` | Open menu (Help / Sample / About) |
+
+Top bar shows `*filename [size]` when file has unsaved changes (italic).
 
 When searching, the status bar shows:
 `Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear`
@@ -159,11 +168,17 @@ When 256-color is enabled, the mode label renders with a per-character gradient 
 | `q` | Quit (prompts to save if modified) |
 | `Ctrl+Q` | Quit (prompts to save if modified) |
 
-## Help
+## Help & Menu
 
 | Key | Action |
 |-----|--------|
 | `?` / `Ctrl+H` | Show help |
+| Click `[MENU]` | Open menu dropdown |
+
+Menu items:
+- **Help**: Show keybinding help
+- **Sample**: Open a 256-byte sample file (0x00..0xFF) in memory
+- **About**: Version, author, license info
 
 ## Color Configuration
 
