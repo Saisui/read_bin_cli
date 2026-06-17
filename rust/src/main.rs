@@ -2498,7 +2498,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             } else {
                 8
             };
-            let offset_str = format!("&{:0width$x}", app.cursor_byte, width = hex_w);
+            let offset_str = format!("& {:0width$x}", app.cursor_byte, width = hex_w);
             let cur_pack = app.cursor_byte / app.pack_size + 1;
             let pack_str = format!("@{:x}/{:x}", cur_pack, app.total_packs);
             return f.render_widget(
@@ -2566,7 +2566,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             } else {
                 8
             };
-            let offset_str = format!("&{:0width$x}", app.cursor_byte, width = hex_w);
+            let offset_str = format!("& {:0width$x}", app.cursor_byte, width = hex_w);
             let max_rows = app.max_rows(area.height);
             let last_global_row = (app.global_scroll_top() + max_rows - 1)
                 .min(app.global_total_rows().saturating_sub(1));
