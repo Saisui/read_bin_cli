@@ -3206,13 +3206,17 @@ fn draw_file_browser(f: &mut ratatui::Frame, fb: &app::FileBrowser, area: Rect) 
             break;
         }
         let entry = &fb.entries[idx];
-        let display = if entry.is_dir {
+        let display = if entry.name == "*sample" {
+            format!("  *sample (0x00-0xFF)")
+        } else if entry.is_dir {
             format!("  {}/", entry.name)
         } else {
             format!("  {}", entry.name)
         };
         let sty = if idx == fb.cursor {
             Style::default().fg(Color::Black).bg(Color::White)
+        } else if entry.name == "*sample" {
+            Style::default().fg(Color::Cyan)
         } else if entry.is_dir {
             Style::default().fg(Color::Blue)
         } else {

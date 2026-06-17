@@ -529,6 +529,13 @@ impl FileBrowser {
         self.cursor = 0;
         self.scroll_top = 0;
 
+        // *sample 始终在最上方
+        self.entries.push(DirEntry {
+            name: "*sample".to_string(),
+            is_dir: false,
+            size: 256,
+        });
+
         // 添加 ../ （除非在根目录）
         if self.current_dir.parent().is_some() {
             self.entries.push(DirEntry {
@@ -575,6 +582,15 @@ impl FileBrowser {
             return None;
         }
         let entry = &self.entries[self.cursor];
+        // *sample：写临时文件并返回路径
+        if entry.name == "*sample" {
+            let sample_path = std::env::temp_dir().join("read-bin-sample.bin");
+            let sample_data: Vec<u8> = (0u8..=255).collect();
+            if std::fs::write(&sample_path, &sample_data).is_ok() {
+                return Some(sample_path);
+            }
+            return None;
+        }
         if entry.is_dir {
             let new_dir = if entry.name == ".." {
                 self.current_dir
