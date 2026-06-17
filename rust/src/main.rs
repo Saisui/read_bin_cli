@@ -579,7 +579,7 @@ fn handle_key_event(
         app.pending_ctrl_k = false;
         match key.code {
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                app.restore_all(data);
+                app.restore_at(data, app.cursor_byte);
             }
             _ => {}
         }
