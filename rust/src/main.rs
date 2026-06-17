@@ -1895,14 +1895,14 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
 /// 绘制主视图（hex/ascii/utf8 内容区）
 /// 绘制顶栏（文件名 + 大小）和主视图
 fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
-    // 顶栏：文件大小 + 文件名（背景色延伸到行尾）
+    // 顶栏：*文件名 [大小]
     let size_str = App::format_size(app.file_size);
-    let dirty_prefix = if app.dirty { "* " } else { "" };
+    let dirty_prefix = if app.dirty { "*" } else { "" };
     let top_bar = format!(
-        "[{}] {}{}",
-        size_str.replace(' ', "_"),
+        "{}{} [{}]",
         dirty_prefix,
-        app.filename
+        app.filename,
+        size_str.replace(' ', "_")
     );
     let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
     let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
