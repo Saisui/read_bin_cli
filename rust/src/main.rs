@@ -152,19 +152,7 @@ fn main() -> io::Result<()> {
 
             match reopen {
                 Ok(true) => {
-                    // Sample 内存数据 → 直接用，不走文件
-                    if let Some(sample) = app.pending_data.take() {
-                        let prev_file = filename.clone();
-                        let mut data = sample;
-                        let base_name = "sample".to_string();
-                        let file_size = data.len();
-                        app = App::new(file_size, base_name);
-                        let _reopen2 = run(&mut terminal, &mut app, &mut data, "");
-                        // Sample 退出后返回之前的文件
-                        filename = prev_file;
-                        continue;
-                    }
-                    // 文件浏览器或 pending_file
+                    // pending_file（包括 Sample 临时文件）或文件浏览器
                     if let Some(ref path) = app.pending_file {
                         filename = path.clone();
                         app.pending_file = None;
@@ -407,8 +395,10 @@ fn handle_mouse_event(
                             app.help_scroll = 0;
                         }
                         1 => {
-                            // Sample: 0x00..0xFF 内存数据，不写文件
-                            app.pending_data = Some((0u8..=255).collect());
+                            // Sample: 写临时文件，走正常文件打开流程
+                            let sample_path = std::env::temp_dir().join("read-bin-sample.bin");
+                            let _ = std::fs::write(&sample_path, (0u8..=255).collect::<Vec<u8>>());
+                            app.pending_file = Some(sample_path.to_string_lossy().to_string());
                             app.input_mode = InputMode::Normal;
                             *should_break = true;
                         }
