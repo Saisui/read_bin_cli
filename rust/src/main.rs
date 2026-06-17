@@ -2888,11 +2888,35 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
 }
 
 /// 绘制菜单下拉弹窗（Help / Sample / About）
+///
+/// 位置：右对齐 [MENU] 按钮正上方
 fn draw_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let items = ["Help", "Sample", "About"];
     let dw = 14u16;
     let dh = items.len() as u16;
-    let dx = area.width.saturating_sub(dw);
+    // 计算 [MENU] 按钮的水平位置（与 draw_status 中的 help_offset 一致）
+    let dirty_len = if app.dirty { 11 } else { 0 };
+    let hex_w = if app.file_size <= 0xff {
+        2
+    } else if app.file_size <= 0xffff {
+        4
+    } else if app.file_size <= 0xffffff {
+        6
+    } else {
+        8
+    };
+    let mode_len = app.mode.label().len() as u16;
+    let at_offset = mode_len + dirty_len as u16 + 2;
+    let at_len = 1 + hex_w as u16;
+    let pack_offset = at_offset + at_len + 2;
+    let pack_str_len = format!(
+        "pack {:x}/{:x}",
+        (app.cursor_byte / app.pack_size) + 1,
+        app.total_packs
+    )
+    .len() as u16;
+    let help_offset = pack_offset + pack_str_len + 2;
+    let dx = help_offset;
     let dy = area.height.saturating_sub(1).saturating_sub(dh);
     let dialog = Rect::new(dx, dy, dw, dh);
     f.render_widget(Clear, dialog);
