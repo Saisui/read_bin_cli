@@ -59,6 +59,8 @@ pub enum InputMode {
     Help,
     ModeSelect,
     FileBrowser,
+    Menu,
+    About,
 }
 
 /// 撤销/重做条目：记录单字节修改
@@ -114,6 +116,8 @@ pub struct App {
     pub is_heat_bg: bool,
     pub is_hslbit_bg: bool,
     pub is_rgbbit_bg: bool,
+    pub pending_file: Option<String>,
+    pub menu_selected: usize,
 }
 
 impl App {
@@ -155,6 +159,8 @@ impl App {
             is_heat_bg: false,
             is_hslbit_bg: false,
             is_rgbbit_bg: false,
+            pending_file: None,
+            menu_selected: 0,
         }
     }
 

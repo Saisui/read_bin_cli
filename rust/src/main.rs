@@ -151,9 +151,14 @@ fn main() -> io::Result<()> {
 
             match reopen {
                 Ok(true) => {
-                    // Ctrl+P: 清空文件名，下轮循环进入文件浏览器
-                    // 不调用 disable_raw_mode()，文件浏览器需要 raw mode
-                    filename.clear();
+                    // Check if pending_file was set (e.g. Sample menu item)
+                    if let Some(ref path) = app.pending_file {
+                        filename = path.clone();
+                        app.pending_file = None;
+                    } else {
+                        // Ctrl+P: 清空文件名，下轮循环进入文件浏览器
+                        filename.clear();
+                    }
                 }
                 Ok(false) => {
                     disable_raw_mode()?;
@@ -203,6 +208,16 @@ fn render_frame(
                 draw_hex(f, app, data, area);
                 draw_status(f, app, data, area);
                 draw_mode_dropdown(f, app, area);
+            }
+            InputMode::Menu => {
+                draw_hex(f, app, data, area);
+                draw_status(f, app, data, area);
+                draw_menu_dropdown(f, app, area);
+            }
+            InputMode::About => {
+                draw_hex(f, app, data, area);
+                draw_status(f, app, data, area);
+                draw_about(f, area);
             }
             _ => {
                 draw_hex(f, app, data, area);
@@ -365,6 +380,36 @@ fn handle_mouse_event(
                 } else {
                     app.input_mode = InputMode::Normal;
                 }
+            } else if app.input_mode == InputMode::About {
+                app.input_mode = InputMode::Normal;
+            } else if app.input_mode == InputMode::Menu {
+                let dw = 14u16;
+                let items_count = 3u16;
+                let dx = size.width.saturating_sub(dw);
+                let dy = area_h.saturating_sub(1).saturating_sub(items_count);
+                if mx >= dx && mx < dx + dw && my >= dy && my < dy + items_count {
+                    let sel = my - dy;
+                    match sel {
+                        0 => {
+                            app.input_mode = InputMode::Help;
+                            app.help_scroll = 0;
+                        }
+                        1 => {
+                            let sample_path = std::env::temp_dir().join("read-bin-sample.bin");
+                            let sample_data: Vec<u8> = (0u8..=255).collect();
+                            let _ = std::fs::write(&sample_path, &sample_data);
+                            app.pending_file = Some(sample_path.to_string_lossy().to_string());
+                            app.input_mode = InputMode::Normal;
+                            *should_break = true;
+                        }
+                        2 => {
+                            app.input_mode = InputMode::About;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    app.input_mode = InputMode::Normal;
+                }
             } else if my == 0 && app.input_mode == InputMode::Normal {
                 // 点击顶栏 → 打开文件浏览器
                 *reopen_browser = true;
@@ -426,8 +471,8 @@ fn handle_mouse_event(
                     app.input_buf.clear();
                     app.input_prompt = "Go to pack (hex):".into();
                 } else if mx >= help_offset {
-                    app.input_mode = InputMode::Help;
-                    app.help_scroll = 0;
+                    app.input_mode = InputMode::Menu;
+                    app.menu_selected = 0;
                 }
             }
         }
@@ -704,6 +749,59 @@ fn handle_key_event(
             }
             KeyCode::PageDown => {
                 app.help_scroll += 10;
+            }
+            _ => {}
+        },
+        InputMode::Menu => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.menu_selected = app.menu_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if app.menu_selected < 2 {
+                    app.menu_selected += 1;
+                }
+            }
+            KeyCode::Enter => match app.menu_selected {
+                0 => {
+                    app.input_mode = InputMode::Help;
+                    app.help_scroll = 0;
+                }
+                1 => {
+                    let sample_path = std::env::temp_dir().join("read-bin-sample.bin");
+                    let sample_data: Vec<u8> = (0u8..=255).collect();
+                    let _ = std::fs::write(&sample_path, &sample_data);
+                    app.pending_file = Some(sample_path.to_string_lossy().to_string());
+                    app.input_mode = InputMode::Normal;
+                    *should_break = true;
+                }
+                2 => {
+                    app.input_mode = InputMode::About;
+                }
+                _ => {}
+            },
+            KeyCode::Char('h') => {
+                app.input_mode = InputMode::Help;
+                app.help_scroll = 0;
+            }
+            KeyCode::Char('s') => {
+                let sample_path = std::env::temp_dir().join("read-bin-sample.bin");
+                let sample_data: Vec<u8> = (0u8..=255).collect();
+                let _ = std::fs::write(&sample_path, &sample_data);
+                app.pending_file = Some(sample_path.to_string_lossy().to_string());
+                app.input_mode = InputMode::Normal;
+                *should_break = true;
+            }
+            KeyCode::Char('a') => {
+                app.input_mode = InputMode::About;
+            }
+            _ => {}
+        },
+        InputMode::About => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.input_mode = InputMode::Normal;
             }
             _ => {}
         },
@@ -2581,10 +2679,10 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             let help_spans: Vec<Span> = vec![
                 Span::raw("  ["),
                 Span::styled(
-                    "H",
+                    "M",
                     Style::default().add_modifier(ratatui::style::Modifier::UNDERLINED),
                 ),
-                Span::raw("ELP]"),
+                Span::raw("ENU]"),
             ];
 
             let mode_label = app.mode.label();
@@ -2748,11 +2846,68 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
+        InputMode::Menu | InputMode::About => "",
     };
     f.render_widget(
         Paragraph::new(Span::styled(text, sp(5))),
         Rect::new(0, area.height - 1, area.width, 1),
     );
+}
+
+/// 绘制菜单下拉弹窗（Help / Sample / About）
+fn draw_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let items = ["Help", "Sample", "About"];
+    let dw = 14u16;
+    let dh = items.len() as u16;
+    let dx = area.width.saturating_sub(dw);
+    let dy = area.height.saturating_sub(1).saturating_sub(dh);
+    let dialog = Rect::new(dx, dy, dw, dh);
+    f.render_widget(Clear, dialog);
+    for (i, item) in items.iter().enumerate() {
+        let sty = if i == app.menu_selected {
+            Style::default().bg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+        f.render_widget(
+            Paragraph::new(Span::styled(format!(" {} ", item), sty)),
+            Rect::new(dx, dy + i as u16, dw, 1),
+        );
+    }
+}
+
+/// 绘制 About 弹窗（居中显示版本、作者、仓库、许可证）
+fn draw_about(f: &mut ratatui::Frame, area: Rect) {
+    let ver = env!("CARGO_PKG_VERSION");
+    let text = vec![
+        format!("read-bin v{}", ver),
+        String::new(),
+        "Terminal hex viewer/editor".to_string(),
+        "Author: Saisui".to_string(),
+        String::new(),
+        "github.com/Saisui/read_bin_cli".to_string(),
+        String::new(),
+        "License: MIT".to_string(),
+    ];
+    let h = text.len() as u16 + 2;
+    let w = 36u16;
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let popup = Rect::new(x, y, w, h);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("About")
+            .style(Style::default().bg(Color::Rgb(20, 20, 40))),
+        popup,
+    );
+    let inner = Rect::new(x + 1, y + 1, w - 2, h - 2);
+    let lines: Vec<Line> = text
+        .iter()
+        .map(|l| Line::from(Span::raw(l.to_string())))
+        .collect();
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 /// 帮助文本内容（从 help.txt 加载，编译时嵌入）
