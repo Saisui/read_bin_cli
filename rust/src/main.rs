@@ -252,23 +252,111 @@ fn handle_mouse_event(
                     }
                 }
             } else if app.input_mode == InputMode::ModeSelect {
-                // 模式下拉菜单点击
-                let dh = 11u16;
+                // 模式下拉菜单点击（radio behavior for color modes）
+                let dh = 12u16;
                 let dy = area_h.saturating_sub(1) - dh;
-                let dw = 10u16;
+                let dw = 14u16;
                 if mx < dw && my >= dy && my < dy + dh {
                     let sel = my - dy;
                     match sel {
                         0 => app.mode = DisplayMode::Ascii,
                         1 => app.mode = DisplayMode::Hex,
                         2 => app.mode = DisplayMode::Utf8,
-                        3 => app.is_color256 = !app.is_color256,
-                        4 => app.is_rgb_bg = !app.is_rgb_bg,
-                        5 => app.is_hsl_bg = !app.is_hsl_bg,
-                        6 => app.is_gray_bg = !app.is_gray_bg,
-                        7 => app.is_heat_bg = !app.is_heat_bg,
-                        8 => app.is_hslbit_bg = !app.is_hslbit_bg,
-                        9 => app.is_rgbbit_bg = !app.is_rgbbit_bg,
+                        // Row 3 = separator (Color:), ignore
+                        4 => {
+                            // None: clear all color modes
+                            app.is_color256 = false;
+                            app.is_rgb_bg = false;
+                            app.is_hsl_bg = false;
+                            app.is_gray_bg = false;
+                            app.is_heat_bg = false;
+                            app.is_hslbit_bg = false;
+                            app.is_rgbbit_bg = false;
+                        }
+                        5 => {
+                            // 256: radio behavior
+                            app.is_color256 = !app.is_color256;
+                            if app.is_color256 {
+                                app.is_rgb_bg = false;
+                                app.is_hsl_bg = false;
+                                app.is_gray_bg = false;
+                                app.is_heat_bg = false;
+                                app.is_hslbit_bg = false;
+                                app.is_rgbbit_bg = false;
+                            }
+                        }
+                        6 => {
+                            // RGB: radio behavior
+                            app.is_rgb_bg = !app.is_rgb_bg;
+                            if app.is_rgb_bg {
+                                app.is_color256 = false;
+                                app.is_hsl_bg = false;
+                                app.is_gray_bg = false;
+                                app.is_heat_bg = false;
+                                app.is_hslbit_bg = false;
+                                app.is_rgbbit_bg = false;
+                            }
+                        }
+                        7 => {
+                            // HSL: radio behavior
+                            app.is_hsl_bg = !app.is_hsl_bg;
+                            if app.is_hsl_bg {
+                                app.is_color256 = false;
+                                app.is_rgb_bg = false;
+                                app.is_gray_bg = false;
+                                app.is_heat_bg = false;
+                                app.is_hslbit_bg = false;
+                                app.is_rgbbit_bg = false;
+                            }
+                        }
+                        8 => {
+                            // GRAY: radio behavior
+                            app.is_gray_bg = !app.is_gray_bg;
+                            if app.is_gray_bg {
+                                app.is_color256 = false;
+                                app.is_rgb_bg = false;
+                                app.is_hsl_bg = false;
+                                app.is_heat_bg = false;
+                                app.is_hslbit_bg = false;
+                                app.is_rgbbit_bg = false;
+                            }
+                        }
+                        9 => {
+                            // HEAT: radio behavior
+                            app.is_heat_bg = !app.is_heat_bg;
+                            if app.is_heat_bg {
+                                app.is_color256 = false;
+                                app.is_rgb_bg = false;
+                                app.is_hsl_bg = false;
+                                app.is_gray_bg = false;
+                                app.is_hslbit_bg = false;
+                                app.is_rgbbit_bg = false;
+                            }
+                        }
+                        10 => {
+                            // hsl: radio behavior
+                            app.is_hslbit_bg = !app.is_hslbit_bg;
+                            if app.is_hslbit_bg {
+                                app.is_color256 = false;
+                                app.is_rgb_bg = false;
+                                app.is_hsl_bg = false;
+                                app.is_gray_bg = false;
+                                app.is_heat_bg = false;
+                                app.is_rgbbit_bg = false;
+                            }
+                        }
+                        11 => {
+                            // rgb: radio behavior
+                            app.is_rgbbit_bg = !app.is_rgbbit_bg;
+                            if app.is_rgbbit_bg {
+                                app.is_color256 = false;
+                                app.is_rgb_bg = false;
+                                app.is_hsl_bg = false;
+                                app.is_gray_bg = false;
+                                app.is_heat_bg = false;
+                                app.is_hslbit_bg = false;
+                            }
+                        }
                         _ => {}
                     }
                     if sel <= 2 {
@@ -639,22 +727,88 @@ fn handle_key_event(
                 app.input_mode = InputMode::Normal;
             }
             KeyCode::Char('4') => {
+                // 256: radio behavior
                 app.is_color256 = !app.is_color256;
+                if app.is_color256 {
+                    app.is_rgb_bg = false;
+                    app.is_hsl_bg = false;
+                    app.is_gray_bg = false;
+                    app.is_heat_bg = false;
+                    app.is_hslbit_bg = false;
+                    app.is_rgbbit_bg = false;
+                }
             }
             KeyCode::Char('5') => {
+                // RGB: radio behavior
                 app.is_rgb_bg = !app.is_rgb_bg;
+                if app.is_rgb_bg {
+                    app.is_color256 = false;
+                    app.is_hsl_bg = false;
+                    app.is_gray_bg = false;
+                    app.is_heat_bg = false;
+                    app.is_hslbit_bg = false;
+                    app.is_rgbbit_bg = false;
+                }
             }
             KeyCode::Char('6') => {
+                // HSL: radio behavior
                 app.is_hsl_bg = !app.is_hsl_bg;
+                if app.is_hsl_bg {
+                    app.is_color256 = false;
+                    app.is_rgb_bg = false;
+                    app.is_gray_bg = false;
+                    app.is_heat_bg = false;
+                    app.is_hslbit_bg = false;
+                    app.is_rgbbit_bg = false;
+                }
             }
             KeyCode::Char('7') => {
+                // GRAY: radio behavior
                 app.is_gray_bg = !app.is_gray_bg;
+                if app.is_gray_bg {
+                    app.is_color256 = false;
+                    app.is_rgb_bg = false;
+                    app.is_hsl_bg = false;
+                    app.is_heat_bg = false;
+                    app.is_hslbit_bg = false;
+                    app.is_rgbbit_bg = false;
+                }
             }
             KeyCode::Char('8') => {
+                // HEAT: radio behavior
                 app.is_heat_bg = !app.is_heat_bg;
+                if app.is_heat_bg {
+                    app.is_color256 = false;
+                    app.is_rgb_bg = false;
+                    app.is_hsl_bg = false;
+                    app.is_gray_bg = false;
+                    app.is_hslbit_bg = false;
+                    app.is_rgbbit_bg = false;
+                }
             }
             KeyCode::Char('9') => {
+                // hsl: radio behavior
                 app.is_hslbit_bg = !app.is_hslbit_bg;
+                if app.is_hslbit_bg {
+                    app.is_color256 = false;
+                    app.is_rgb_bg = false;
+                    app.is_hsl_bg = false;
+                    app.is_gray_bg = false;
+                    app.is_heat_bg = false;
+                    app.is_rgbbit_bg = false;
+                }
+            }
+            KeyCode::Char('0') => {
+                // rgb: radio behavior
+                app.is_rgbbit_bg = !app.is_rgbbit_bg;
+                if app.is_rgbbit_bg {
+                    app.is_color256 = false;
+                    app.is_rgb_bg = false;
+                    app.is_hsl_bg = false;
+                    app.is_gray_bg = false;
+                    app.is_heat_bg = false;
+                    app.is_hslbit_bg = false;
+                }
             }
             _ => {}
         },
@@ -1312,8 +1466,10 @@ fn byte_disp(b: u8, mode: DisplayMode) -> String {
         DisplayMode::Ascii => {
             if b == 0 {
                 ". ".into()
+            } else if b == 0x09 {
+                "↹ ".into()
             } else if b == 0x0d {
-                "\\r".into()
+                "↵ ".into()
             } else if b == 10 {
                 "⏎ ".into()
             } else if b == 0x1b {
@@ -1480,13 +1636,13 @@ fn utf8_char_style(ch: char) -> Style {
     base
 }
 
-/// 将颜色亮度降至 20%（用于编辑模式背景压暗）
+/// 将颜色亮度降至 45%（用于编辑模式背景压暗）
 fn dim_color(c: Color) -> Color {
     let (r, g, b) = color_config::color_rgb(c);
     Color::Rgb(
-        (r as u16 * 20 / 100) as u8,
-        (g as u16 * 20 / 100) as u8,
-        (b as u16 * 20 / 100) as u8,
+        (r as u16 * 45 / 100) as u8,
+        (g as u16 * 45 / 100) as u8,
+        (b as u16 * 45 / 100) as u8,
     )
 }
 
@@ -1722,7 +1878,7 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
         } else {
             base
         }
-    } else if app.input_mode == InputMode::Edit {
+    } else if app.input_mode == InputMode::Edit && !app.is_gray_bg {
         dim_style(base)
     } else {
         base
@@ -1904,9 +2060,9 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let dc = match *ch {
                             '\0' => ". ".into(),
                             '\n' => "⏎ ".into(),
-                            '\r' => "\\r".into(),
+                            '\r' => "↵ ".into(),
                             '\x1b' => "\\e".into(),
-                            '\t' => "⇥ ".into(),
+                            '\t' => "↹ ".into(),
                             c if (c as u32) < 0x20 => format!("{:02x}", c as u8),
                             _ => {
                                 let s: String = ch.to_string();
@@ -2163,6 +2319,8 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             Color::White
                         };
                         Style::default().bg(Color::Indexed(b)).fg(fg)
+                    } else if app.is_gray_bg {
+                        byte_style(b, app.mode)
                     } else {
                         dim_style(byte_style(b, app.mode))
                     };
@@ -2697,16 +2855,16 @@ fn draw_save_dialog(f: &mut ratatui::Frame, app: &App, area: Rect) {
 
 /// 绘制模式选择下拉菜单（从状态栏 [ASCII] 下方展开）
 ///
-/// 包含三个模式选项（ASCII/HEX/UTF8）和一个 256 色勾选框。
-/// 点击选项切换模式，点击 256 切换勾选状态。
+/// 包含三个显示模式（ASCII/HEX/UTF8）和颜色模式（None/256/RGB/HSL/GRAY/HEAT/hsl/rgb）。
+/// 颜色模式使用单选按钮（●/○）行为，标签背景色匹配对应显示效果。
 fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let modes = [
         (DisplayMode::Ascii, "[ASCII]"),
         (DisplayMode::Hex, "[HEX]  "),
         (DisplayMode::Utf8, "[UTF8] "),
     ];
-    let dw = 10u16;
-    let dh = 10u16;
+    let dw = 14u16;
+    let dh = 12u16;
     let dy = area.height.saturating_sub(1) - dh;
     let dx = 0u16;
     let dialog = Rect::new(dx, dy, dw, dh);
@@ -2722,118 +2880,54 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
             Rect::new(dx, dy + i as u16, dw, 1),
         );
     }
-    let checkbox = if app.is_color256 {
-        " [x] 256 "
-    } else {
-        " [ ] 256 "
-    };
-    let cb_style = if app.is_color256 {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Rgb(147, 112, 219))
-    } else {
-        Style::default()
-    };
+    // Separator row
     f.render_widget(
-        Paragraph::new(Span::styled(checkbox, cb_style)),
+        Paragraph::new(Span::styled(
+            " ── Color ── ",
+            Style::default().fg(Color::DarkGray),
+        )),
         Rect::new(dx, dy + 3, dw, 1),
     );
-    let rgb_checkbox = if app.is_rgb_bg {
-        " [x] RGB "
-    } else {
-        " [ ] RGB "
-    };
-    let rgb_style = if app.is_rgb_bg {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Rgb(147, 112, 219))
-    } else {
-        Style::default()
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(rgb_checkbox, rgb_style)),
-        Rect::new(dx, dy + 4, dw, 1),
-    );
-    let hsl_checkbox = if app.is_hsl_bg {
-        " [x] HSL "
-    } else {
-        " [ ] HSL "
-    };
-    let hsl_style = if app.is_hsl_bg {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Rgb(147, 112, 219))
-    } else {
-        Style::default()
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(hsl_checkbox, hsl_style)),
-        Rect::new(dx, dy + 5, dw, 1),
-    );
-    let gray_checkbox = if app.is_gray_bg {
-        " [x] GRAY "
-    } else {
-        " [ ] GRAY "
-    };
-    let gray_style = if app.is_gray_bg {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Rgb(147, 112, 219))
-    } else {
-        Style::default()
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(gray_checkbox, gray_style)),
-        Rect::new(dx, dy + 6, dw, 1),
-    );
-    let heat_checkbox = if app.is_heat_bg {
-        " [x] HEAT "
-    } else {
-        " [ ] HEAT "
-    };
-    let heat_style = if app.is_heat_bg {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Rgb(147, 112, 219))
-    } else {
-        Style::default()
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(heat_checkbox, heat_style)),
-        Rect::new(dx, dy + 7, dw, 1),
-    );
-    let hslbit_checkbox = if app.is_hslbit_bg {
-        " [x] hsl "
-    } else {
-        " [ ] hsl "
-    };
-    let hslbit_style = if app.is_hslbit_bg {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Rgb(147, 112, 219))
-    } else {
-        Style::default()
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(hslbit_checkbox, hslbit_style)),
-        Rect::new(dx, dy + 8, dw, 1),
-    );
-    let rgbbit_checkbox = if app.is_rgbbit_bg {
-        " [x] rgb "
-    } else {
-        " [ ] rgb "
-    };
-    let rgbbit_style = if app.is_rgbbit_bg {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Rgb(147, 112, 219))
-    } else {
-        Style::default()
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(rgbbit_checkbox, rgbbit_style)),
-        Rect::new(dx, dy + 9, dw, 1),
-    );
+    // Color mode radio buttons
+    let none_sel = !app.is_color256
+        && !app.is_rgb_bg
+        && !app.is_hsl_bg
+        && !app.is_gray_bg
+        && !app.is_heat_bg
+        && !app.is_hslbit_bg
+        && !app.is_rgbbit_bg;
+    let color_items: [(bool, &str, Option<Color>); 8] = [
+        (none_sel, "None", None),
+        (app.is_color256, "256 ", Some(Color::Indexed(208))),
+        (app.is_rgb_bg, "RGB ", Some(Color::Rgb(200, 100, 50))),
+        (app.is_hsl_bg, "HSL ", Some(Color::Rgb(100, 200, 150))),
+        (app.is_gray_bg, "GRAY", Some(Color::Rgb(160, 160, 160))),
+        (app.is_heat_bg, "HEAT", Some(heat_bg(160))),
+        (app.is_hslbit_bg, "hsl ", Some(hslbit_bg(160))),
+        (app.is_rgbbit_bg, "rgb ", Some(rgbbit_bg(160))),
+    ];
+    for (i, (sel, label, bg)) in color_items.iter().enumerate() {
+        let radio = if *sel { "●" } else { "○" };
+        let line = if let Some(bg_color) = bg {
+            let fg = if color_config::luminance(*bg_color) > 128.0 {
+                Color::Black
+            } else {
+                Color::White
+            };
+            let label_style = Style::default().bg(*bg_color).fg(fg);
+            Line::from(vec![
+                Span::styled(format!(" {} ", radio), Style::default()),
+                Span::styled(label.to_string(), label_style),
+                Span::raw(" "),
+            ])
+        } else {
+            Line::from(vec![Span::raw(format!(" {} {} ", radio, label))])
+        };
+        f.render_widget(
+            Paragraph::new(line),
+            Rect::new(dx, dy + 4 + i as u16, dw, 1),
+        );
+    }
 }
 
 /// 绘制文件浏览器
