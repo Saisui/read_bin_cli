@@ -104,6 +104,7 @@ pub struct App {
     pub search_rx: Option<mpsc::Receiver<SearchEvent>>,
     pub is_color256: bool,
     pub is_rgb_bg: bool,
+    pub is_hsl_bg: bool,
 }
 
 impl App {
@@ -142,6 +143,7 @@ impl App {
             search_rx: None,
             is_color256: false,
             is_rgb_bg: false,
+            is_hsl_bg: false,
         }
     }
 

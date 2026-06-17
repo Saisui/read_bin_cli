@@ -242,7 +242,7 @@ fn handle_mouse_event(
                 }
             } else if app.input_mode == InputMode::ModeSelect {
                 // 模式下拉菜单点击
-                let dh = 6u16;
+                let dh = 7u16;
                 let dy = area_h.saturating_sub(1) - dh;
                 let dw = 10u16;
                 if mx < dw && my >= dy && my < dy + dh {
@@ -253,6 +253,7 @@ fn handle_mouse_event(
                         2 => app.mode = DisplayMode::Utf8,
                         3 => app.is_color256 = !app.is_color256,
                         4 => app.is_rgb_bg = !app.is_rgb_bg,
+                        5 => app.is_hsl_bg = !app.is_hsl_bg,
                         _ => {}
                     }
                     if sel <= 2 {
@@ -565,6 +566,7 @@ fn handle_key_event(
             KeyCode::Char('3') => { app.mode = DisplayMode::Utf8; app.input_mode = InputMode::Normal; }
             KeyCode::Char('4') => { app.is_color256 = !app.is_color256; }
             KeyCode::Char('5') => { app.is_rgb_bg = !app.is_rgb_bg; }
+            KeyCode::Char('6') => { app.is_hsl_bg = !app.is_hsl_bg; }
             _ => {}
         }
         InputMode::FileBrowser => {
@@ -924,6 +926,9 @@ fn handle_normal(
                 app.is_rgb_bg = true;
             } else if app.is_rgb_bg {
                 app.is_rgb_bg = false;
+                app.is_hsl_bg = true;
+            } else if app.is_hsl_bg {
+                app.is_hsl_bg = false;
             } else {
                 app.is_color256 = true;
             }
@@ -1317,6 +1322,37 @@ fn rgb_bg(data: &[u8], off: usize, file_size: usize) -> Color {
     Color::Rgb(r, g, b)
 }
 
+/// HSL → RGB 转换
+///
+/// h: 0.0~360.0, s: 0.0~1.0, l: 0.0~1.0
+/// 返回 (r, g, b) 各 0~255。
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = if h < 60.0 { (c, x, 0.0) }
+        else if h < 120.0 { (x, c, 0.0) }
+        else if h < 180.0 { (0.0, c, x) }
+        else if h < 240.0 { (0.0, x, c) }
+        else if h < 300.0 { (x, 0.0, c) }
+        else { (c, 0.0, x) };
+    (((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8)
+}
+
+/// 计算 HSL 背景色：H=prev, L=self, S=next
+///
+/// 边界处理同 rgb_bg。H 映射 0~360°，L/S 映射 0~100%。
+fn hsl_bg(data: &[u8], off: usize, file_size: usize) -> Color {
+    let b1 = if off > 0 { data[off - 1] } else { data.get(off + 16).copied().unwrap_or(0) };
+    let b2 = data[off];
+    let b3 = if off + 1 < file_size { data[off + 1] } else { data.get(off + 16).copied().unwrap_or(0) };
+    let h = b1 as f64 * 360.0 / 255.0;
+    let l = b2 as f64 / 255.0;
+    let s = b3 as f64 / 255.0;
+    let (r, g, b) = hsl_to_rgb(h, s, l);
+    Color::Rgb(r, g, b)
+}
+
 const STD_COLORS: [(u8,u8,u8); 8] = [
     (0,0,0), (170,0,0), (0,170,0), (170,85,0),
     (0,0,170), (170,0,170), (0,170,170), (170,170,170),
@@ -1486,6 +1522,10 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     let bg = rgb_bg(data_full, go, app.file_size);
                     let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
                     resolve(app, go, Style::default().bg(bg).fg(fg), mr)
+                } else if app.is_hsl_bg {
+                    let bg = hsl_bg(data_full, go, app.file_size);
+                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    resolve(app, go, Style::default().bg(bg).fg(fg), mr)
                 } else if app.is_color256 {
                     let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
                     resolve(app, go, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
@@ -1552,6 +1592,10 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                                 let bg = rgb_bg(data_full, cgo, app.file_size);
                                 let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
                                 resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
+                            } else if app.is_hsl_bg {
+                                let bg = hsl_bg(data_full, cgo, app.file_size);
+                                let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                                resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
                             } else if app.is_color256 {
                                 let fg = if indexed_luminance(tail_b) > 128.0 { Color::Black } else { Color::White };
                                 resolve(app, cgo, Style::default().bg(Color::Indexed(tail_b)).fg(fg), mr)
@@ -1567,6 +1611,10 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let b = data[bo];
                         let base = if app.is_rgb_bg {
                             let bg = rgb_bg(data_full, go, app.file_size);
+                            let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                            Style::default().bg(bg).fg(fg)
+                        } else if app.is_hsl_bg {
+                            let bg = hsl_bg(data_full, go, app.file_size);
                             let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
                             Style::default().bg(bg).fg(fg)
                         } else if app.is_color256 {
@@ -1604,6 +1652,10 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         let bg = rgb_bg(data_full, go, app.file_size);
                         let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
                         Style::default().bg(bg).fg(fg)
+                    } else if app.is_hsl_bg {
+                        let bg = hsl_bg(data_full, go, app.file_size);
+                        let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                        Style::default().bg(bg).fg(fg)
                     } else if app.is_color256 {
                         let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
                         Style::default().bg(Color::Indexed(b)).fg(fg)
@@ -1631,6 +1683,10 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     let bg = rgb_bg(data_full, go, app.file_size);
                     let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
                     Style::default().bg(bg).fg(fg)
+                } else if app.is_hsl_bg {
+                    let bg = hsl_bg(data_full, go, app.file_size);
+                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    Style::default().bg(bg).fg(fg)
                 } else if app.is_color256 {
                     let fg = if indexed_luminance(b) > 128.0 { Color::Black } else { Color::White };
                     Style::default().bg(Color::Indexed(b)).fg(fg)
@@ -1638,7 +1694,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     byte_style(b, app.mode)
                 };
                 let sty = resolve(app, go, base, mr);
-                let final_sty = if app.is_color256 || app.is_rgb_bg { sty } else if dim { dim_bg_10pct(sty) } else { sty };
+                let final_sty = if app.is_color256 || app.is_rgb_bg || app.is_hsl_bg { sty } else if dim { dim_bg_10pct(sty) } else { sty };
                 spans.push(Span::styled(byte_disp(b, app.mode), final_sty));
             }
         }
@@ -1719,10 +1775,40 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
             let last_global_row = (app.global_scroll_top() + max_rows - 1).min(app.global_total_rows().saturating_sub(1));
             let last_pack = last_global_row / (app.pack_size / 16);
             let pack_str = format!("pack {:x}/{:x}", last_pack + 1, app.total_packs);
-            let help_str = "  Ctrl+H:help";
+            let help_spans: Vec<Span> = vec![
+                Span::raw("  ["),
+                Span::styled("H", Style::default().add_modifier(ratatui::style::Modifier::UNDERLINED)),
+                Span::raw("ELP]"),
+            ];
 
             let mode_label = app.mode.label();
-            let mut spans = if app.is_color256 || app.is_rgb_bg {
+            let mut spans = if app.is_rgb_bg {
+                let label_chars: Vec<char> = mode_label.chars().collect();
+                let n = label_chars.len();
+                label_chars.iter().enumerate().map(|(i, &c)| {
+                    let r = if i > 0 { label_chars[i - 1] as u8 } else { c as u8 };
+                    let g = c as u8;
+                    let b = if i + 1 < n { label_chars[i + 1] as u8 } else { c as u8 };
+                    let bg = Color::Rgb(r, g, b);
+                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
+                }).collect::<Vec<_>>()
+            } else if app.is_hsl_bg {
+                let label_chars: Vec<char> = mode_label.chars().collect();
+                let n = label_chars.len();
+                label_chars.iter().enumerate().map(|(i, &c)| {
+                    let b1 = if i > 0 { label_chars[i - 1] as u8 } else { c as u8 };
+                    let b2 = c as u8;
+                    let b3 = if i + 1 < n { label_chars[i + 1] as u8 } else { c as u8 };
+                    let h = b1 as f64 * 360.0 / 255.0;
+                    let l = b2 as f64 / 255.0;
+                    let s = b3 as f64 / 255.0;
+                    let (rr, gg, bb) = hsl_to_rgb(h, s, l);
+                    let bg = Color::Rgb(rr, gg, bb);
+                    let fg = if color_config::luminance(bg) > 128.0 { Color::Black } else { Color::White };
+                    Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
+                }).collect::<Vec<_>>()
+            } else if app.is_color256 {
                 let grad = [
                     Color::Rgb(100, 149, 237),
                     Color::Rgb(123, 137, 231),
@@ -1739,7 +1825,8 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 vec![Span::styled(mode_label, sp(5))]
             };
             spans.push(Span::styled(dirty, sp(5)));
-            spans.push(Span::styled(format!("  {}  {}{}", offset_str, pack_str, help_str), sp(5)));
+            spans.push(Span::styled(format!("  {}  {}", offset_str, pack_str), sp(5)));
+            spans.extend(help_spans);
             return f.render_widget(
                 Paragraph::new(Line::from(spans)),
                 Rect::new(0, area.height - 1, area.width, 1),
@@ -1747,7 +1834,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
         }
         InputMode::ModeSelect => {
             return f.render_widget(
-                Paragraph::new(Span::styled("↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB", sp(5))),
+                Paragraph::new(Span::styled("↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB 6:HSL", sp(5))),
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
@@ -1872,7 +1959,7 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         (DisplayMode::Utf8, "[UTF8] "),
     ];
     let dw = 10u16;
-    let dh = 6u16;
+    let dh = 7u16;
     let dy = area.height.saturating_sub(1) - dh;
     let dx = 0u16;
     let dialog = Rect::new(dx, dy, dw, dh);
@@ -1903,6 +1990,16 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(rgb_checkbox, rgb_style)),
         Rect::new(dx, dy + 4, dw, 1),
+    );
+    let hsl_checkbox = if app.is_hsl_bg { " [x] HSL " } else { " [ ] HSL " };
+    let hsl_style = if app.is_hsl_bg {
+        Style::default().fg(Color::White).bg(Color::Rgb(147, 112, 219))
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(hsl_checkbox, hsl_style)),
+        Rect::new(dx, dy + 5, dw, 1),
     );
 }
 
