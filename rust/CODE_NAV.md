@@ -12,10 +12,11 @@
 
 ```
 src/
-├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~1700 行）
+├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~2500 行）
 ├── app.rs           # 应用状态管理（跨页滚动、光标、搜索、undo/redo）
+├── bitmap.rs        # 四级位图搜索引擎（L0~L3，804 字节固定内存）
 ├── color_config.rs  # YAML 颜色配置加载 + fg: auto 逻辑
-├── search.rs        # 搜索引擎（精确 hex + nibble 模式 + 三级位图索引）
+├── search.rs        # 搜索模式解析（hex/nibble/字符串 → Needle）
 └── utf8.rs          # UTF-8 字节分类与解码
 ```
 
@@ -23,10 +24,11 @@ src/
 
 ```
 main.rs
- ├── app.rs        （App 状态、跨页滚动）
+ ├── app.rs          （App 状态、跨页滚动、搜索导航）
+ ├── bitmap.rs       （BitSearch 四级位图搜索引擎）
  ├── color_config.rs （ColorConfig 颜色配置）
- ├── search.rs     （Search 搜索状态）
- └── utf8.rs       （ByteClass 字节分类）
+ ├── search.rs       （Needle 搜索模式解析）
+ └── utf8.rs         （ByteClass 字节分类）
 ```
 
 ## 关键数据流
@@ -61,9 +63,14 @@ main.rs
 
 ### 底栏点击区域
 ```
-[ASCII]  @00000042  pack 2/5  Ctrl+H:help
-  ↑          ↑          ↑           ↑
-  模式菜单   跳转字节    跳转页      帮助
+[ASCII]  &1a3f  pack 2/5  Ctrl+H:help
+  ↑         ↑        ↑           ↑
+  模式菜单  跳转字节  跳转页      帮助
+```
+
+搜索时：
+```
+Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 ```
 
 ## app.rs 导航
@@ -75,7 +82,7 @@ main.rs
 ### App 核心字段
 - 分页：`file_size`, `pack_size`(4096), `total_packs`, `current_pack`, `scroll_top`
 - 光标：`cursor_byte`, `cursor_nibble`（hex 模式的半字节）
-- 搜索：`search`, `search_active`, `pack_ranges`, `global_match_idx`
+- 搜索：`search`(BitSearch), `search_active`, `search_len`, `current_match`
 - 编辑：`undo_stack`, `redo_stack`, `dirty`
 - 选区：`sel_start`, `sel_end`, `dragging`
 - 显示：`is_color256`
@@ -88,8 +95,10 @@ main.rs
 - `ensure_cursor_visible()`：跨页光标跟随
 
 ### 搜索导航方法
-- `jump_global()` / `next_global()` / `prev_global()`：全局搜索导航
-- `next_page_match()` / `prev_page_match()`：跨页匹配跳转
+- `jump_to_match()`：跳转到指定字节位置的匹配
+- `next_global()` / `prev_global()`：逐个匹配导航
+- `jump_to_page_match()` / `jump_to_page_match_prev()`：跳到目标页第一个匹配
+- `current_match_number()`：实时计算当前是第几个匹配
 
 ### 编辑方法
 - `modify()` / `undo()` / `redo()`：字节编辑 + 撤销
@@ -135,6 +144,27 @@ L2: 每 1GB 1 bit    → 快速跳过空 GB
 [0-3]f      → 高 nibble 在 0-3，低 nibble=f
 z           → 任意字节（= 两个 Any nibble）
 ```
+
+## bitmap.rs 导航
+
+### 四级位图
+```
+L3: 128B — 全文件 1024 个 1GB 块的存在性
+L2: 128B — 当前 1GB 内 1024 个 1MB 块的存在性
+L1:  32B — 当前 1MB 内 256 个 4K 页的存在性
+L0: 512B — 当前 4K 页内 4096 字节的存在性
+```
+
+### 核心方法
+- `scan_chunk()`：按需扫描 1MB，标记匹配到位图
+- `next_match_after()` / `prev_match_before()`：位图下降查找下一个/上一个匹配
+- `matches_at()`：检查指定位置是否匹配
+- `pack_matches()`：获取指定 pack 内的匹配范围（供渲染高亮）
+- `ensure_cached()` / `ensure_mb_cached()`：切换区域时重建 L0/L1 缓存
+
+### 位操作
+- `set_bit()` / `next_set()` / `prev_set()`：位图设置和扫描
+- `encode()` / `decode()`：偏移量 ↔ 四级索引编解码
 
 ## utf8.rs 导航
 

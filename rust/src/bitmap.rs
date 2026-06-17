@@ -10,28 +10,32 @@
 ///   L0: 512B — 当前 4K 页内 4096 字节的存在性
 use crate::search::{atoms_match, Needle};
 
-const L0_BITS: usize = 4096;
-const L1_BITS: usize = 256;
-const L2_BITS: usize = 1024;
-const L3_BITS: usize = 1024;
-const PAGE_SIZE: usize = 4096;
-const MB_SIZE: usize = 1024 * 1024;
-const GB_SIZE: usize = 1024 * 1024 * 1024;
-const SCAN_CHUNK: usize = 1024 * 1024;
+const L0_BITS: usize = 4096; // L0 层位数（4K 页内字节数）
+const L1_BITS: usize = 256; // L1 层位数（1MB 内 4K 页数）
+const L2_BITS: usize = 1024; // L2 层位数（1GB 内 1MB 块数）
+const L3_BITS: usize = 1024; // L3 层位数（最大支持 1024 个 1GB 块）
+const PAGE_SIZE: usize = 4096; // 4K 页大小
+const MB_SIZE: usize = 1024 * 1024; // 1MB
+const GB_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+const SCAN_CHUNK: usize = 1024 * 1024; // 每次按需扫描的数据块大小
 
+/// 四级位图搜索引擎
+///
+/// 内存布局：L0(512) + L1(32) + L2(128) + L3(128) = 804 字节固定开销。
+/// L0/L1 缓存当前区域，切换时重建；L2/L3 始终有效。
 pub struct BitSearch {
-    l0: [u8; 512],
-    l1: [u8; 32],
-    l2: [u8; 128],
-    l3: [u8; 128],
-    pub count: usize,
-    scanned: usize,
-    needle: Needle,
-    needle_len: usize,
-    pub label: String,
-    cached_page: usize,
-    cached_mb: usize,
-    file_size: usize,
+    l0: [u8; 512],      // 当前 4K 页内每个字节的匹配存在性
+    l1: [u8; 32],       // 当前 1MB 内 256 个 4K 页的匹配存在性
+    l2: [u8; 128],      // 当前 1GB 内 1024 个 1MB 块的匹配存在性
+    l3: [u8; 128],      // 全文件 1024 个 1GB 块的匹配存在性
+    pub count: usize,   // 已找到的匹配总数
+    scanned: usize,     // 已扫描到的字节偏移（按需搜索游标）
+    needle: Needle,     // 搜索模式（精确字节/nibble 模式）
+    needle_len: usize,  // 搜索模式长度（字节数）
+    pub label: String,  // 搜索标签（用于状态栏显示）
+    cached_page: usize, // 当前 L0 缓存对应的 4K 页起始偏移
+    cached_mb: usize,   // 当前 L1 缓存对应的 1MB 块编号
+    file_size: usize,   // 文件大小
 }
 
 // ─── 位操作 ──────────────────────────────────────────────
@@ -122,6 +126,7 @@ impl BitSearch {
         self.scanned < self.file_size
     }
 
+    /// 标记一个匹配位置，设置四级位图中的对应位
     fn mark(&mut self, pos: usize) {
         let (g3, g2, g1, g0) = decode(pos);
         set_bit(&mut self.l0, g0);
@@ -131,6 +136,9 @@ impl BitSearch {
         self.count += 1;
     }
 
+    /// 按需扫描一个数据块（1MB），标记匹配到位图
+    ///
+    /// 返回本次新增的匹配数。扫描位置从 self.scanned 开始。
     pub fn scan_chunk(&mut self, data: &[u8]) -> usize {
         let start = self.scanned;
         let end = (start + SCAN_CHUNK).min(self.file_size);
@@ -167,6 +175,9 @@ impl BitSearch {
         }
     }
 
+    /// 确保 pos 所在 4K 页的 L0 和所在 1MB 的 L1 已缓存
+    ///
+    /// 切换区域时重新扫描该区域，重建 L0/L1 位图。
     fn ensure_cached(&mut self, data: &[u8], pos: usize) {
         let page_start = pos - (pos % PAGE_SIZE);
         if self.cached_page == page_start {
@@ -185,6 +196,9 @@ impl BitSearch {
         }
     }
 
+    /// 确保 pos 所在 1MB 块的 L1 + L0 已缓存
+    ///
+    /// 比 ensure_cached 粒度更粗，切换 1MB 时调用。
     fn ensure_mb_cached(&mut self, data: &[u8], pos: usize) {
         let mb_key = pos / MB_SIZE;
         if self.cached_mb == mb_key {
@@ -211,6 +225,9 @@ impl BitSearch {
         }
     }
 
+    /// 切换 1GB 块时重建 L2 位图
+    ///
+    /// 扫描该 1GB 中已扫描过的部分，标记有匹配的 1MB 块。
     fn rebuild_l2_for_gb(&mut self, data: &[u8], g3: usize) {
         self.l2 = [0u8; 128];
         let gb_start = g3 * GB_SIZE;

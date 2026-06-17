@@ -66,14 +66,19 @@ Scrolling seamlessly crosses page boundaries — no stopping at page edges.
 
 ### Search Navigation
 
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate matches within current view |
-| `←` / `→` | Jump to global prev/next match |
-| `H` / `L` | Jump ±16 packs, find first match |
-| `O` / `P` | Jump ±1MB, find next match |
-| `HOME` | Jump to first match in file |
-| `g` | Go to pack and first match there |
+In search mode, all navigation keys keep their normal step size but jump to the first match on the target page.
+
+| Key | Step | Action |
+|-----|------|--------|
+| `↑` / `↓` | Per match | Navigate to prev/next match |
+| `←` / `→` | ±1 page | First match on target page |
+| `J` / `K` | ±1 screen | First match on target page |
+| `PGUP` / `PGDN` | ±½ screen | First match on target page |
+| `H` / `L` | ±16 pages | First match on target page |
+| `O` / `P` | ±256 pages | First match on target page |
+| `HOME` | To start | First match in file |
+
+If the target page has no match, scanning continues forward until one is found.
 
 ## Edit Mode
 
@@ -122,9 +127,12 @@ The bottom status bar has clickable regions:
 | Region | Action |
 |--------|--------|
 | `[ASCII]` / `[HEX]` / `[UTF8]` | Open mode dropdown |
-| `@00000042` | Goto byte address |
+| `&00000042` | Goto byte address |
 | `pack 2/5` | Goto page number |
 | `Ctrl+H:help` | Open help |
+
+When searching, the status bar shows:
+`Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear`
 
 When 256-color is enabled, the mode label renders with a per-character gradient (blue → purple → pink).
 
