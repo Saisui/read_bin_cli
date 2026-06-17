@@ -581,6 +581,10 @@ fn handle_key_event(
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 app.restore_at(data, app.cursor_byte);
             }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                app.input_mode = InputMode::Menu;
+                app.menu_selected = 0;
+            }
             _ => {}
         }
         return;
