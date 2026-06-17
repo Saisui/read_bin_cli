@@ -3216,7 +3216,9 @@ fn draw_file_browser(f: &mut ratatui::Frame, fb: &app::FileBrowser, area: Rect) 
         let sty = if idx == fb.cursor {
             Style::default().fg(Color::Black).bg(Color::White)
         } else if entry.name == "*sample" {
-            Style::default().fg(Color::Cyan)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(ratatui::style::Modifier::ITALIC)
         } else if entry.is_dir {
             Style::default().fg(Color::Blue)
         } else {
