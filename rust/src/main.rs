@@ -2003,14 +2003,16 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                         .current_match
                         .map(|pos| pos / app.pack_size + 1)
                         .unwrap_or(0);
+                    // 当前是第几个匹配
+                    let cur_num = app.current_match_number(data);
                     let mut disp = s.label.clone();
                     if disp.len() > 24 {
                         disp.truncate(24);
                         disp.push_str("...");
                     }
                     let status = format!(
-                        "Search: {} [{}{}] @{:x}/{:x}  ↑↓:next ESC:clear",
-                        disp, total, plus, cur_pack, app.total_packs
+                        "Search: {} [{}/{}{}] @{:x}/{:x}  ↑↓:next ESC:clear",
+                        disp, cur_num, total, plus, cur_pack, app.total_packs
                     );
                     return f.render_widget(
                         Paragraph::new(Span::styled(status, sp(5))),

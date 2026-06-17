@@ -230,6 +230,29 @@ impl App {
         self.search_len = 0;
     }
 
+    /// 当前匹配是第几个（从 1 开始），通过扫描已缓存区域计数
+    pub fn current_match_number(&self, data: &[u8]) -> usize {
+        let pos = match self.current_match {
+            Some(p) => p,
+            None => return 0,
+        };
+        let s = match self.search.as_ref() {
+            Some(s) => s,
+            None => return 0,
+        };
+        // 逐字节扫描到 pos，计算匹配数
+        let scan_end = pos.min(s.scanned());
+        let mut count = 0usize;
+        let mut p = 0usize;
+        while p + self.search_len <= scan_end {
+            if s.matches_at(data, p) {
+                count += 1;
+            }
+            p += 1;
+        }
+        count
+    }
+
     /// 跳转到指定字节位置的搜索匹配
     pub fn jump_to_match(&mut self, pos: usize, h: u16) {
         self.current_match = Some(pos);

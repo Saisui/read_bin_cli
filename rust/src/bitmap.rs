@@ -151,7 +151,13 @@ impl BitSearch {
         found
     }
 
-    fn matches_at(&self, data: &[u8], pos: usize) -> bool {
+    /// 已扫描到的字节偏移
+    pub fn scanned(&self) -> usize {
+        self.scanned
+    }
+
+    /// 检查 pos 处是否匹配
+    pub fn matches_at(&self, data: &[u8], pos: usize) -> bool {
         if pos + self.needle_len > data.len() {
             return false;
         }
