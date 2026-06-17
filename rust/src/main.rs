@@ -18,8 +18,16 @@ mod utf8;
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+/// flock(2) 系统调用（阻止外部修改文件）
+extern "C" {
+    fn flock(fd: i32, operation: i32) -> i32;
+}
+const LOCK_SH: i32 = 1; // 共享锁（允许多个读者，阻止写者）
+const LOCK_EX: i32 = 2; // 独占锁（阻止所有其他访问）
 
 use crossterm::{
     event::{
@@ -49,13 +57,14 @@ use app::{App, DisplayMode, InputMode};
 /// 终端只创建一次，文件浏览器和查看器共享。
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let dump = args.get(2).map(|s| s.as_str()) == Some("--dump");
+    let dump = args.iter().any(|a| a == "--dump");
+    let use_flock = args.iter().any(|a| a == "--flock");
 
-    let mut filename = if args.len() < 2 {
-        String::new()
-    } else {
-        args[1].clone()
-    };
+    let mut filename = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .unwrap_or_default();
 
     // 终端只创建一次
     enable_raw_mode().map_err(|e| io::Error::new(e.kind(), format!("enable_raw_mode: {}", e)))?;
@@ -85,6 +94,13 @@ fn main() -> io::Result<()> {
             } else {
                 OpenOptions::new().read(true).open(&filename)?
             };
+            // --flock：加共享锁，阻止外部程序写入文件
+            if use_flock && !dump {
+                let ret = unsafe { flock(file.as_raw_fd(), LOCK_SH) };
+                if ret != 0 {
+                    eprintln!("Warning: flock failed (code {})", ret);
+                }
+            }
             let file_size = file.metadata()?.len() as usize;
             if file_size == 0 {
                 eprintln!("Empty file");
@@ -131,6 +147,7 @@ fn main() -> io::Result<()> {
             }
 
             let mmap = unsafe { Mmap::map(&file)? };
+            // file 保持存活直到循环体结束，确保 flock 锁持续到 run() 返回
 
             // 首次加载颜色配置，后续调用忽略（OnceLock 已设置）
             let _ = init_colors(std::path::Path::new("color.yaml"));
