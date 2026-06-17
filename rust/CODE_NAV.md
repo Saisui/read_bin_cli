@@ -12,9 +12,10 @@
 
 ```
 src/
-├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~2500 行）
+├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~3200 行）
 ├── app.rs           # 应用状态管理（跨页滚动、光标、搜索、undo/redo）
 ├── bitmap.rs        # 四级位图搜索引擎（L0~L3，804 字节固定内存）
+├── modified.rs      # Sparse Hierarchical Bitmap（稀疏层级位图，追踪编辑字节）
 ├── color_config.rs  # YAML 颜色配置加载 + fg: auto 逻辑
 ├── search.rs        # 搜索模式解析（hex/nibble/字符串 → Needle）
 └── utf8.rs          # UTF-8 字节分类与解码
@@ -26,6 +27,7 @@ src/
 main.rs
  ├── app.rs          （App 状态、跨页滚动、搜索导航）
  ├── bitmap.rs       （BitSearch 四级位图搜索引擎）
+ ├── modified.rs     （ModifiedMap 稀疏层级位图）
  ├── color_config.rs （ColorConfig 颜色配置）
  ├── search.rs       （Needle 搜索模式解析）
  └── utf8.rs         （ByteClass 字节分类）
@@ -83,9 +85,10 @@ Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 - 分页：`file_size`, `pack_size`(4096), `total_packs`, `current_pack`, `scroll_top`
 - 光标：`cursor_byte`, `cursor_nibble`（hex 模式的半字节）
 - 搜索：`search`(BitSearch), `search_active`, `search_len`, `current_match`
-- 编辑：`undo_stack`, `redo_stack`, `dirty`
+- 编辑：`undo_stack`, `redo_stack`, `dirty`, `modified`(ModifiedMap), `original_values`(HashMap)
 - 选区：`sel_start`, `sel_end`, `dragging`
 - 显示：`is_color256`, `is_rgb_bg`, `is_hsl_bg`, `is_gray_bg`, `is_heat_bg`, `is_hslbit_bg`, `is_rgbbit_bg`
+- 菜单：`pending_ctrl_k`, `pending_file`, `pending_data`, `menu_selected`
 
 ### 跨页滚动方法
 - `global_total_rows()`：文件总行数
@@ -101,7 +104,8 @@ Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 - `current_match_number()`：实时计算当前是第几个匹配
 
 ### 编辑方法
-- `modify()` / `undo()` / `redo()`：字节编辑 + 撤销
+- `modify()` / `undo()` / `redo()`：字节编辑 + 撤销（modify 自动标记到 ModifiedMap + 存原始值）
+- `restore_at()`：还原光标字节到原始值（Ctrl+K,R），不影响 undo/redo
 - `edit_hex()` / `edit_char()`：hex/字符编辑
 
 ## color_config.rs 导航
@@ -165,6 +169,36 @@ L0: 512B — 当前 4K 页内 4096 字节的存在性
 ### 位操作
 - `set_bit()` / `next_set()` / `prev_set()`：位图设置和扫描
 - `encode()` / `decode()`：偏移量 ↔ 四级索引编解码
+
+## modified.rs 导航
+
+### Sparse Hierarchical Bitmap（作者 Saisui 发明）
+
+稀疏层级位图，用于追踪文件中被编辑过的字节。
+灵感来源于四级位图搜索引擎（BitSearch），但采用按需分配策略。
+
+**设计思想**：将文件偏移空间按 4K → 1MB → 1GB → 1TB 分层，
+每层用位图标记"该区域是否有编辑"。
+查询时从顶层向下逐级缩小范围，任意一层"无"则跳过整棵子树。
+只为实际有编辑的区域分配下级位图，未编辑区域零开销。
+
+### 层级结构
+```
+L3: [u8; 128]                    128B 固定（1024 个 1GB 块）
+L2: HashMap<usize, [u8; 128]>    每个有编辑的 1GB 块分配 128B
+L1: HashMap<usize, [u8; 32]>     每个有编辑的 1MB 块分配 32B
+L0: HashMap<usize, [u8; 512]>    每个有编辑的 4K 页分配 512B
+```
+
+### 核心方法
+- `mark(offset)`：标记字节为"已编辑"，按需分配 L0/L1/L2
+- `unmark(offset)`：清除标记，级联释放空的父节点
+- `is_modified(offset)`：查询是否编辑过，O(1) 最多 4 次位操作
+
+### 性能
+- 固定开销 ~328B（L3 + 3 个 HashMap 头）
+- 10000 个编辑 ≈ 252KB 内存
+- 渲染时每字节 4 次 HashMap 查找，480 字节/帧 ≈ 24μs
 
 ## utf8.rs 导航
 
