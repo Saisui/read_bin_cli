@@ -558,8 +558,12 @@ fn handle_mouse_event(
 
 /// 处理键盘事件
 ///
-/// 包括：Release 过滤、Windows 40ms 节流、Ctrl/Alt 全局快捷键、
-/// 模式分发（Help/ModeSelect/SaveConfirm/Search/Edit/Normal）。
+/// 处理顺序：
+/// 1. Release 事件过滤（Windows 兼容）
+/// 2. Ctrl+K 前缀键（二次按键序列：R=还原字节，M=菜单）
+/// 3. Ctrl 全局快捷键（Z/Y/Q/G/H/S/C/F/K/P）
+/// 4. Alt 快捷键（J/K=选区，M=模式，↑↓=字节值微调）
+/// 5. 模式分发（Help/ModeSelect/SaveConfirm/Search/Edit/Normal）
 fn handle_key_event(
     app: &mut App,
     key: crossterm::event::KeyEvent,
@@ -574,7 +578,11 @@ fn handle_key_event(
         return;
     }
 
-    // Ctrl+K prefix: 等待下一个键
+    // ─── Ctrl+K 前缀键（二次按键序列）──────────────────
+    // 第一次按 Ctrl+K 设置 pending_ctrl_k = true，等待下一个键。
+    // 支持：
+    //   R → 还原光标字节到编辑前的原始值（restore_at）
+    //   M → 打开菜单（Help / Sample / About）
     if app.pending_ctrl_k {
         app.pending_ctrl_k = false;
         match key.code {
@@ -590,18 +598,23 @@ fn handle_key_event(
         return;
     }
 
-    // Ctrl shortcuts (global)
+    // ─── Ctrl 全局快捷键（所有模式下生效）──────────────
+    // 在模式分发之前处理，任何模式下按 Ctrl+X 都会触发。
+    // 每个分支处理后 return，不进入模式分发。
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('z') => {
+                // 撤销
                 app.undo(data);
                 return;
             }
             KeyCode::Char('y') => {
+                // 重做
                 app.redo(data);
                 return;
             }
             KeyCode::Char('q') => {
+                // 退出（有修改弹确认）
                 if app.dirty {
                     app.input_mode = InputMode::SaveConfirm;
                     app.save_selected = true;
@@ -724,17 +737,22 @@ fn handle_key_event(
         }
     }
 
+    // ─── Alt 快捷键 ──────────────────────────────────
+    // Alt+J/K: 选区标记  Alt+M: 模式切换  Alt+↑/↓: 字节值微调
     if key.modifiers.contains(KeyModifiers::ALT) {
         match key.code {
             KeyCode::Char('j') => {
+                // 选区起点
                 app.sel_start = Some(app.cursor_byte);
                 return;
             }
             KeyCode::Char('k') => {
+                // 选区终点
                 app.sel_end = Some(app.cursor_byte);
                 return;
             }
             KeyCode::Char('m') => {
+                // 切换显示模式
                 app.mode = app.mode.next();
                 return;
             }
@@ -763,8 +781,12 @@ fn handle_key_event(
 
     app.cursor_focused = true;
 
+    // ─── 模式分发 ─────────────────────────────────────
+    // 每个模式有自己的按键处理逻辑。
+    // 处理顺序：Help → ModeSelect → SaveConfirm → SearchInput → Edit → Normal
     match app.input_mode {
         InputMode::Help => match key.code {
+            // 帮助弹窗：滚动/关闭
             KeyCode::Esc | KeyCode::Char('q') => {
                 app.input_mode = InputMode::Normal;
             }
