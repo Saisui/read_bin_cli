@@ -253,7 +253,7 @@ fn handle_mouse_event(
                 }
             } else if app.input_mode == InputMode::ModeSelect {
                 // 模式下拉菜单点击
-                let dh = 9u16;
+                let dh = 10u16;
                 let dy = area_h.saturating_sub(1) - dh;
                 let dw = 10u16;
                 if mx < dw && my >= dy && my < dy + dh {
@@ -267,6 +267,7 @@ fn handle_mouse_event(
                         5 => app.is_hsl_bg = !app.is_hsl_bg,
                         6 => app.is_gray_bg = !app.is_gray_bg,
                         7 => app.is_heat_bg = !app.is_heat_bg,
+                        8 => app.is_hslbit_bg = !app.is_hslbit_bg,
                         _ => {}
                     }
                     if sel <= 2 {
@@ -651,6 +652,9 @@ fn handle_key_event(
             KeyCode::Char('8') => {
                 app.is_heat_bg = !app.is_heat_bg;
             }
+            KeyCode::Char('9') => {
+                app.is_hslbit_bg = !app.is_hslbit_bg;
+            }
             _ => {}
         },
         InputMode::FileBrowser => {
@@ -1031,6 +1035,9 @@ fn handle_normal(
                 app.is_heat_bg = true;
             } else if app.is_heat_bg {
                 app.is_heat_bg = false;
+                app.is_hslbit_bg = true;
+            } else if app.is_hslbit_bg {
+                app.is_hslbit_bg = false;
             } else {
                 app.is_color256 = true;
             }
@@ -1584,6 +1591,20 @@ fn heat_bg(b: u8) -> Color {
     Color::Rgb(r as u8, g as u8, bl as u8)
 }
 
+/// 位分解 HSL 背景色：高4位=色相，中2位=亮度，低2位=饱和度
+///
+/// 字节布局：`0bHHHH_LLSS`
+/// - H (bits 7-4): 色相 0°~337.5°（16 级，步长 22.5°）
+/// - L (bits 3-2): 亮度 20%~80%（4 级）
+/// - S (bits 1-0): 饱和 25%~100%（4 级）
+fn hslbit_bg(b: u8) -> Color {
+    let h = ((b >> 4) as f64) * 22.5; // 0~337.5
+    let l = 0.2 + ((b >> 2) & 0x03) as f64 * 0.2; // 0.2~0.8
+    let s = 0.25 + (b & 0x03) as f64 * 0.25; // 0.25~1.0
+    let (r, g, bl) = hsl_to_rgb(h, s, l);
+    Color::Rgb(r, g, bl)
+}
+
 const STD_COLORS: [(u8, u8, u8); 8] = [
     (0, 0, 0),
     (170, 0, 0),
@@ -1818,6 +1839,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         Color::White
                     };
                     resolve(app, go, Style::default().bg(bg).fg(fg), mr)
+                } else if app.is_hslbit_bg {
+                    let bg = hslbit_bg(tail_b);
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
+                    resolve(app, go, Style::default().bg(bg).fg(fg), mr)
                 } else if app.is_color256 {
                     let fg = if indexed_luminance(tail_b) > 128.0 {
                         Color::Black
@@ -1933,6 +1962,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                                     Color::White
                                 };
                                 resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
+                            } else if app.is_hslbit_bg {
+                                let bg = hslbit_bg(tail_b);
+                                let fg = if color_config::luminance(bg) > 128.0 {
+                                    Color::Black
+                                } else {
+                                    Color::White
+                                };
+                                resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
                             } else if app.is_color256 {
                                 let fg = if indexed_luminance(tail_b) > 128.0 {
                                     Color::Black
@@ -1981,6 +2018,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             Style::default().bg(bg).fg(fg)
                         } else if app.is_heat_bg {
                             let bg = heat_bg(b);
+                            let fg = if color_config::luminance(bg) > 128.0 {
+                                Color::Black
+                            } else {
+                                Color::White
+                            };
+                            Style::default().bg(bg).fg(fg)
+                        } else if app.is_hslbit_bg {
+                            let bg = hslbit_bg(b);
                             let fg = if color_config::luminance(bg) > 128.0 {
                                 Color::Black
                             } else {
@@ -2054,6 +2099,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             Color::White
                         };
                         Style::default().bg(bg).fg(fg)
+                    } else if app.is_hslbit_bg {
+                        let bg = hslbit_bg(b);
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
+                        Style::default().bg(bg).fg(fg)
                     } else if app.is_color256 {
                         let fg = if indexed_luminance(b) > 128.0 {
                             Color::Black
@@ -2113,6 +2166,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         Color::White
                     };
                     Style::default().bg(bg).fg(fg)
+                } else if app.is_hslbit_bg {
+                    let bg = hslbit_bg(b);
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
+                    Style::default().bg(bg).fg(fg)
                 } else if app.is_color256 {
                     let fg = if indexed_luminance(b) > 128.0 {
                         Color::Black
@@ -2129,6 +2190,7 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     || app.is_hsl_bg
                     || app.is_gray_bg
                     || app.is_heat_bg
+                    || app.is_hslbit_bg
                 {
                     sty
                 } else if dim {
@@ -2180,6 +2242,14 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 Span::styled(format!(" [{:02X}]", b), Style::default().fg(fg).bg(bg))
             } else if app.is_heat_bg && app.cursor_byte < app.file_size {
                 let bg = heat_bg(b);
+                let fg = if color_config::luminance(bg) > 128.0 {
+                    Color::Black
+                } else {
+                    Color::White
+                };
+                Span::styled(format!(" [{:02X}]", b), Style::default().fg(fg).bg(bg))
+            } else if app.is_hslbit_bg && app.cursor_byte < app.file_size {
+                let bg = hslbit_bg(b);
                 let fg = if color_config::luminance(bg) > 128.0 {
                     Color::Black
                 } else {
@@ -2368,6 +2438,20 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                         Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
                     })
                     .collect::<Vec<_>>()
+            } else if app.is_hslbit_bg {
+                let label_chars: Vec<char> = mode_label.chars().collect();
+                label_chars
+                    .iter()
+                    .map(|&c| {
+                        let bg = hslbit_bg(c as u8);
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
+                        Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
+                    })
+                    .collect::<Vec<_>>()
             } else if app.is_color256 {
                 let grad = [
                     Color::Rgb(100, 149, 237),
@@ -2402,7 +2486,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
         InputMode::ModeSelect => {
             return f.render_widget(
                 Paragraph::new(Span::styled(
-                    "↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB 6:HSL 7:GRAY 8:HEAT",
+                    "↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB 6:HSL 7:GRAY 8:HEAT 9:HSLBIT",
                     sp(5),
                 )),
                 Rect::new(0, area.height - 1, area.width, 1),
@@ -2542,7 +2626,7 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         (DisplayMode::Utf8, "[UTF8] "),
     ];
     let dw = 10u16;
-    let dh = 8u16;
+    let dh = 9u16;
     let dy = area.height.saturating_sub(1) - dh;
     let dx = 0u16;
     let dialog = Rect::new(dx, dy, dw, dh);
@@ -2637,6 +2721,22 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(heat_checkbox, heat_style)),
         Rect::new(dx, dy + 7, dw, 1),
+    );
+    let hslbit_checkbox = if app.is_hslbit_bg {
+        " [x] HSLBI"
+    } else {
+        " [ ] HSLBI"
+    };
+    let hslbit_style = if app.is_hslbit_bg {
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(147, 112, 219))
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(hslbit_checkbox, hslbit_style)),
+        Rect::new(dx, dy + 8, dw, 1),
     );
 }
 

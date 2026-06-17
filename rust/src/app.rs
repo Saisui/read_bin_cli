@@ -112,6 +112,7 @@ pub struct App {
     pub is_hsl_bg: bool,
     pub is_gray_bg: bool,
     pub is_heat_bg: bool,
+    pub is_hslbit_bg: bool,
 }
 
 impl App {
@@ -151,6 +152,7 @@ impl App {
             is_hsl_bg: false,
             is_gray_bg: false,
             is_heat_bg: false,
+            is_hslbit_bg: false,
         }
     }
 
