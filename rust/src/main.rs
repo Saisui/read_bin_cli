@@ -816,10 +816,11 @@ fn handle_key_event(
                 1 => {
                     let sample_path = std::env::temp_dir().join("read-bin-sample.bin");
                     let sample_data: Vec<u8> = (0u8..=255).collect();
-                    let _ = std::fs::write(&sample_path, &sample_data);
-                    app.pending_file = Some(sample_path.to_string_lossy().to_string());
-                    app.input_mode = InputMode::Normal;
-                    *should_break = true;
+                    if std::fs::write(&sample_path, &sample_data).is_ok() {
+                        app.pending_file = Some(sample_path.to_string_lossy().to_string());
+                        app.input_mode = InputMode::Normal;
+                        *should_break = true;
+                    }
                 }
                 2 => {
                     app.input_mode = InputMode::About;
@@ -1062,7 +1063,7 @@ fn run(
             _ => {}
         }
     }
-    Ok(reopen_browser)
+    Ok(reopen_browser || app.pending_file.is_some())
 }
 
 /// 保存确认弹窗的输入处理（y/n/space/esc）
