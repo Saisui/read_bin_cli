@@ -403,11 +403,17 @@ fn handle_mouse_event(
                 } else {
                     8
                 };
-                let at_offset = (6 + dirty_len + 2) as u16;
-                let at_len = (1 + hex_w) as u16;
+                // 用实际模式标签长度替代硬编码的 6
+                let mode_len = app.mode.label().len() as u16;
+                let at_offset = mode_len + dirty_len as u16 + 2;
+                let at_len = 1 + hex_w as u16;
                 let pack_offset = at_offset + at_len + 2;
-                let pack_total_hex = format!("{:x}", app.total_packs).len();
-                let pack_len = (5 + hex_w + 1 + pack_total_hex) as u16;
+                let pack_str = format!(
+                    "pack {:x}/{:x}",
+                    (app.cursor_byte / app.pack_size) + 1,
+                    app.total_packs
+                );
+                let pack_len = pack_str.len() as u16;
                 let help_offset = pack_offset + pack_len + 2;
                 if mx < 7 {
                     app.input_mode = InputMode::ModeSelect;
