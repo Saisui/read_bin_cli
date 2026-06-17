@@ -574,6 +574,18 @@ fn handle_key_event(
         return;
     }
 
+    // Ctrl+K prefix: 等待下一个键
+    if app.pending_ctrl_k {
+        app.pending_ctrl_k = false;
+        match key.code {
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                app.restore_all(data);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // Ctrl shortcuts (global)
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
@@ -608,6 +620,10 @@ fn handle_key_event(
             KeyCode::Char('s') => {
                 let _ = std::fs::write(filename, &*data);
                 app.dirty = false;
+                return;
+            }
+            KeyCode::Char('k') => {
+                app.pending_ctrl_k = true;
                 return;
             }
             KeyCode::Char('c') => {

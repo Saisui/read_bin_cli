@@ -96,6 +96,8 @@ pub struct App {
     pub undo_stack: Vec<UndoEntry>,
     pub redo_stack: Vec<UndoEntry>,
     pub modified: crate::modified::ModifiedMap,
+    pub original_values: std::collections::HashMap<usize, u8>,
+    pub pending_ctrl_k: bool,
     pub search: Option<BitSearch>,
     pub search_active: bool,
     pub search_len: usize,
@@ -141,6 +143,8 @@ impl App {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             modified: crate::modified::ModifiedMap::new(),
+            original_values: std::collections::HashMap::new(),
+            pending_ctrl_k: false,
             search: None,
             search_active: false,
             search_len: 0,
@@ -362,8 +366,12 @@ impl App {
     }
 
     /// 修改单字节并记录到撤销栈，同时标记到层级位图
+    ///
+    /// 首次编辑某字节时，将其原始值存入 original_values。
     pub fn modify(&mut self, mmap: &mut [u8], off: usize, val: u8) {
         if off < self.file_size && mmap[off] != val {
+            // 首次编辑：存原始值
+            self.original_values.entry(off).or_insert(mmap[off]);
             self.undo_stack.push(UndoEntry {
                 offset: off,
                 old: mmap[off],
@@ -374,6 +382,20 @@ impl App {
             self.dirty = true;
             self.modified.mark(off);
         }
+    }
+
+    /// 还原所有编辑过的字节到原始值，清除编辑状态
+    pub fn restore_all(&mut self, mmap: &mut [u8]) {
+        for (&off, &orig) in &self.original_values {
+            if off < self.file_size {
+                mmap[off] = orig;
+            }
+        }
+        self.original_values.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.modified = crate::modified::ModifiedMap::new();
+        self.dirty = false;
     }
 
     /// 撤销上一次修改
