@@ -89,6 +89,41 @@ impl ModifiedMap {
         self.l0.entry(l0_key).or_insert([0; L0_BYTES])[l0_idx / 8] |= 1 << (l0_idx % 8);
     }
 
+    /// 清除一个字节偏移的"已编辑"标记
+    pub fn unmark(&mut self, offset: usize) {
+        let l3_idx = offset >> 30;
+        let l2_idx = (offset >> 20) & 0x3FF;
+        let l1_idx = (offset >> 12) & 0xFF;
+        let l0_idx = offset & 0xFFF;
+
+        let l1_key = l3_idx * 1024 + l2_idx;
+        let l0_key = l1_key * 256 + l1_idx;
+
+        if let Some(l0) = self.l0.get_mut(&l0_key) {
+            l0[l0_idx / 8] &= !(1 << (l0_idx % 8));
+            // 如果该 4K 页清空了，移除 L0 条目
+            if l0.iter().all(|&b| b == 0) {
+                self.l0.remove(&l0_key);
+            }
+        }
+        if let Some(l1) = self.l1.get_mut(&l1_key) {
+            l1[l1_idx / 8] &= !(1 << (l1_idx % 8));
+            if l1.iter().all(|&b| b == 0) {
+                self.l1.remove(&l1_key);
+            }
+        }
+        if let Some(l2) = self.l2.get_mut(&l3_idx) {
+            l2[l2_idx / 8] &= !(1 << (l2_idx % 8));
+            if l2.iter().all(|&b| b == 0) {
+                self.l2.remove(&l3_idx);
+            }
+        }
+        // L3: 检查该 1GB 块是否还有任何编辑
+        if !self.l2.contains_key(&l3_idx) {
+            self.l3[l3_idx / 8] &= !(1 << (l3_idx % 8));
+        }
+    }
+
     /// 查询一个字节偏移是否被编辑过
     ///
     /// 逐级下降，任意一层"无"则立即返回 false。

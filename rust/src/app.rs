@@ -384,18 +384,17 @@ impl App {
         }
     }
 
-    /// 还原所有编辑过的字节到原始值，清除编辑状态
-    pub fn restore_all(&mut self, mmap: &mut [u8]) {
-        for (&off, &orig) in &self.original_values {
+    /// 还原指定字节到原始值
+    pub fn restore_at(&mut self, mmap: &mut [u8], off: usize) {
+        if let Some(orig) = self.original_values.remove(&off) {
             if off < self.file_size {
                 mmap[off] = orig;
             }
+            self.undo_stack.retain(|e| e.offset != off);
+            self.redo_stack.retain(|e| e.offset != off);
+            self.modified.unmark(off);
+            self.dirty = !self.undo_stack.is_empty();
         }
-        self.original_values.clear();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.modified = crate::modified::ModifiedMap::new();
-        self.dirty = false;
     }
 
     /// 撤销上一次修改
