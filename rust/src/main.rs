@@ -1033,9 +1033,11 @@ fn handle_normal(
                 }
             }
         }
+        // 搜索模式下：跳到目标页的第一个匹配（步长与非搜索模式相同）
         KeyCode::Left | KeyCode::Char('h') => {
             if app.search_active {
-                app.prev_global(data, th);
+                let target = app.current_pack.saturating_sub(1);
+                app.jump_to_page_match_prev(target, data, th);
             } else if app.current_pack > 0 {
                 app.current_pack -= 1;
                 app.scroll_top = 0;
@@ -1043,24 +1045,39 @@ fn handle_normal(
         }
         KeyCode::Right | KeyCode::Char('l') => {
             if app.search_active {
-                app.next_global(data, th);
+                let target = (app.current_pack + 1).min(app.total_packs - 1);
+                app.jump_to_page_match(target, data, th);
             } else if app.current_pack + 1 < app.total_packs {
                 app.current_pack += 1;
                 app.scroll_top = 0;
             }
         }
         KeyCode::Char('K') => {
-            let gs = app.global_scroll_top();
-            app.set_global_scroll(gs.saturating_sub(max_rows));
+            if app.search_active {
+                // K = 上翻一屏 → 回退 max_rows 个 pack
+                let packs_per_screen = (max_rows * 16 / app.pack_size).max(1);
+                let target = app.current_pack.saturating_sub(packs_per_screen);
+                app.jump_to_page_match_prev(target, data, th);
+            } else {
+                let gs = app.global_scroll_top();
+                app.set_global_scroll(gs.saturating_sub(max_rows));
+            }
         }
         KeyCode::Char('J') => {
-            let gs = app.global_scroll_top();
-            let max = app.global_total_rows().saturating_sub(max_rows);
-            app.set_global_scroll((gs + max_rows).min(max));
+            if app.search_active {
+                let packs_per_screen = (max_rows * 16 / app.pack_size).max(1);
+                let target = (app.current_pack + packs_per_screen).min(app.total_packs - 1);
+                app.jump_to_page_match(target, data, th);
+            } else {
+                let gs = app.global_scroll_top();
+                let max = app.global_total_rows().saturating_sub(max_rows);
+                app.set_global_scroll((gs + max_rows).min(max));
+            }
         }
         KeyCode::Char('H') => {
             if app.search_active {
-                app.prev_global(data, th);
+                let target = app.current_pack.saturating_sub(16);
+                app.jump_to_page_match_prev(target, data, th);
             } else {
                 let target = app.current_pack.saturating_sub(16);
                 app.current_pack = target;
@@ -1069,7 +1086,8 @@ fn handle_normal(
         }
         KeyCode::Char('L') => {
             if app.search_active {
-                app.next_global(data, th);
+                let target = (app.current_pack + 16).min(app.total_packs - 1);
+                app.jump_to_page_match(target, data, th);
             } else {
                 let target = (app.current_pack + 16).min(app.total_packs - 1);
                 app.current_pack = target;
@@ -1077,19 +1095,35 @@ fn handle_normal(
             }
         }
         KeyCode::PageUp => {
-            let step = (max_rows / 2).max(1);
-            let gs = app.global_scroll_top();
-            app.set_global_scroll(gs.saturating_sub(step));
+            if app.search_active {
+                let step = (max_rows / 2).max(1);
+                let packs = (step * 16 / app.pack_size).max(1);
+                let target = app.current_pack.saturating_sub(packs);
+                app.jump_to_page_match_prev(target, data, th);
+            } else {
+                let step = (max_rows / 2).max(1);
+                let gs = app.global_scroll_top();
+                app.set_global_scroll(gs.saturating_sub(step));
+            }
         }
         KeyCode::PageDown => {
-            let step = (max_rows / 2).max(1);
-            let gs = app.global_scroll_top();
-            let max = app.global_total_rows().saturating_sub(max_rows);
-            app.set_global_scroll((gs + step).min(max));
+            if app.search_active {
+                let step = (max_rows / 2).max(1);
+                let packs = (step * 16 / app.pack_size).max(1);
+                let target = (app.current_pack + packs).min(app.total_packs - 1);
+                app.jump_to_page_match(target, data, th);
+            } else {
+                let step = (max_rows / 2).max(1);
+                let gs = app.global_scroll_top();
+                let max = app.global_total_rows().saturating_sub(max_rows);
+                app.set_global_scroll((gs + step).min(max));
+            }
         }
         KeyCode::Home => {
             if app.search_active {
-                app.prev_global(data, th);
+                // Home → 第一个匹配
+                app.current_match = None;
+                app.next_global(data, th);
             } else {
                 app.current_pack = 0;
                 app.scroll_top = 0;

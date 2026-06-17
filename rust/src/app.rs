@@ -288,6 +288,40 @@ impl App {
         false
     }
 
+    /// 跳转到目标 pack 中的第一个匹配
+    ///
+    /// 搜索模式下，导航键（←→/PGDN/PGUP/J/K/H/L/O/P）保持各自的步长，
+    /// 但目标从"该页"变为"该页的第一个匹配项"。
+    /// 如果目标页没有匹配，继续向后扫描直到找到有匹配的页。
+    pub fn jump_to_page_match(&mut self, target_pack: usize, data: &[u8], h: u16) -> bool {
+        let start_off = target_pack * self.pack_size;
+        let from = if start_off > 0 { start_off - 1 } else { 0 };
+        if let Some(ref mut s) = self.search {
+            if let Some(pos) = s.next_match_after(data, from) {
+                // 确保匹配在目标页或之后的页中
+                if pos >= start_off {
+                    self.jump_to_match(pos, h);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 跳转到目标 pack 中的最后一个匹配（向前搜索）
+    pub fn jump_to_page_match_prev(&mut self, target_pack: usize, data: &[u8], h: u16) -> bool {
+        let end_off = ((target_pack + 1) * self.pack_size).min(self.file_size);
+        if let Some(ref mut s) = self.search {
+            if let Some(pos) = s.prev_match_before(data, end_off) {
+                if pos < end_off && pos / self.pack_size <= target_pack {
+                    self.jump_to_match(pos, h);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// 确保光标在可见区域内（跨页）
     ///
     /// 根据光标全局行号与当前视口全局起始行号比较，
