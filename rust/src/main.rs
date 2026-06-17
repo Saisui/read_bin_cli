@@ -2881,9 +2881,10 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         );
     }
     // Separator row
+    let line_str = "─".repeat((dw as usize).saturating_sub(2));
     f.render_widget(
         Paragraph::new(Span::styled(
-            " ── Color ── ",
+            format!(" {} ", line_str),
             Style::default().fg(Color::DarkGray),
         )),
         Rect::new(dx, dy + 3, dw, 1),
