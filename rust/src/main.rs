@@ -2911,9 +2911,8 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
 ///
 /// 位置：右对齐 [MENU] 按钮正上方
 fn draw_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
-    let items = ["Help", "Sample", "About"];
     let dw = 14u16;
-    let dh = items.len() as u16;
+    let dh = 3u16;
     // 计算 [MENU] 按钮的水平位置（与 draw_status 中的 help_offset 一致）
     let dirty_len = if app.dirty { 11 } else { 0 };
     let hex_w = if app.file_size <= 0xff {
@@ -2941,15 +2940,27 @@ fn draw_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let dialog = Rect::new(dx, dy, dw, dh);
     f.render_widget(Clear, dialog);
     for (i, item) in items.iter().enumerate() {
+        let (base, shortcut) = match i {
+            0 => ("Help", 'H'),
+            1 => ("Sample", 'S'),
+            2 => ("About", 'A'),
+            _ => ("", ' '),
+        };
         let sty = if i == app.menu_selected {
             Style::default().bg(Color::DarkGray)
         } else {
             Style::default()
         };
-        f.render_widget(
-            Paragraph::new(Span::styled(format!(" {} ", item), sty)),
-            Rect::new(dx, dy + i as u16, dw, 1),
-        );
+        let line = Line::from(vec![
+            Span::styled(" ", sty),
+            Span::styled(
+                shortcut.to_string(),
+                sty.add_modifier(ratatui::style::Modifier::UNDERLINED),
+            ),
+            Span::styled(&base[1..], sty),
+            Span::styled(" ", sty),
+        ]);
+        f.render_widget(Paragraph::new(line), Rect::new(dx, dy + i as u16, dw, 1));
     }
 }
 
