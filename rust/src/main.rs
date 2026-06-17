@@ -2856,7 +2856,7 @@ fn draw_save_dialog(f: &mut ratatui::Frame, app: &App, area: Rect) {
 /// 绘制模式选择下拉菜单（从状态栏 [ASCII] 下方展开）
 ///
 /// 包含三个显示模式（ASCII/HEX/UTF8）和颜色模式（None/256/RGB/HSL/GRAY/HEAT/hsl/rgb）。
-/// 颜色模式使用单选按钮（●/○）行为，标签背景色匹配对应显示效果。
+/// 颜色模式使用单选按钮（▶）行为，标签背景色匹配对应显示效果。
 fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let modes = [
         (DisplayMode::Ascii, "[ASCII]"),
@@ -2907,7 +2907,7 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         (app.is_rgbbit_bg, "rgb ", Some(rgbbit_bg(160))),
     ];
     for (i, (sel, label, bg)) in color_items.iter().enumerate() {
-        let radio = if *sel { "●" } else { "○" };
+        let radio = if *sel { "▶" } else { " " };
         let line = if let Some(bg_color) = bg {
             let fg = if color_config::luminance(*bg_color) > 128.0 {
                 Color::Black
@@ -2917,11 +2917,12 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
             let label_style = Style::default().bg(*bg_color).fg(fg);
             Line::from(vec![
                 Span::styled(format!(" {} ", radio), Style::default()),
+                Span::raw(" "),
                 Span::styled(label.to_string(), label_style),
                 Span::raw(" "),
             ])
         } else {
-            Line::from(vec![Span::raw(format!(" {} {} ", radio, label))])
+            Line::from(vec![Span::raw(format!(" {}  {} ", radio, label))])
         };
         f.render_widget(
             Paragraph::new(line),
