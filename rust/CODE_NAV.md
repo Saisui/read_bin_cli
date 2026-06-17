@@ -56,6 +56,34 @@ main.rs
 - `handle_edit()`：编辑模式（光标移动 + 字节编辑）
 - `handle_normal()`：Normal 模式快捷键（跨页滚动）
 
+### 快捷键体系
+
+**Ctrl 前缀键**（全局，在模式分发之前处理）：
+- `Ctrl+Z` / `Ctrl+Y`：撤销 / 重做
+- `Ctrl+Q`：退出（有修改弹确认）
+- `Ctrl+G`：跳转到偏移地址
+- `Ctrl+H`：帮助弹窗
+- `Ctrl+S`：保存
+- `Ctrl+C`：复制选区
+- `Ctrl+F`：搜索
+- `Ctrl+P`：打开文件浏览器
+
+**Ctrl+K 前缀键**（二次按键，`pending_ctrl_k` 状态）：
+- `Ctrl+K, R`：还原光标字节到原始值（`restore_at`）
+- `Ctrl+K, M`：打开菜单（Help / Sample / About）
+
+**Alt 键**：
+- `Alt+J` / `Alt+K`：设置选区起点 / 终点
+- `Alt+M`：打开菜单
+- `Alt+↑` / `Alt+↓`：字节值 ±1
+
+**模式分发**（`handle_key_event` 中 `match app.input_mode`）：
+- `Normal` → `handle_normal()`：导航/搜索/模式切换
+- `Edit` → `handle_edit()`：光标移动 + 字节编辑
+- `SearchInput` / `GotoInput` / `GotoByteInput` → `handle_input()`：文本输入
+- `SaveConfirm` → `handle_save()`：y/n 确认
+- `Help` / `Menu` / `About` / `ModeSelect`：各自 ESC 关闭
+
 ### 渲染（1100-1600）
 - `sp(n)`：编号 → 样式映射
 - `resolve()`：样式优先级链（cursor > found > search > selection > edit-dim > base）
