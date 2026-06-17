@@ -157,17 +157,10 @@ fn main() -> io::Result<()> {
                         let base_name = "sample".to_string();
                         let file_size = data.len();
                         app = App::new(file_size, base_name);
-                        let reopen2 = run(&mut terminal, &mut app, &mut data, "");
-                        match reopen2 {
-                            Ok(true) => {
-                                filename.clear();
-                                continue;
-                            }
-                            _ => {
-                                disable_raw_mode()?;
-                                return Ok(());
-                            }
-                        }
+                        let _reopen2 = run(&mut terminal, &mut app, &mut data, "");
+                        // Sample 退出后返回文件浏览器
+                        filename.clear();
+                        continue;
                     }
                     // 文件浏览器或 pending_file
                     if let Some(ref path) = app.pending_file {
