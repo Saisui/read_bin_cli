@@ -2037,10 +2037,22 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
     let text = match app.input_mode {
         InputMode::Edit => {
             // 编辑模式状态栏：模式 + 字节值 + 地址 + 页码
-            let byte_info = if app.cursor_byte < app.file_size {
-                format!(" [{:02X}]", data[app.cursor_byte])
+            let b = if app.cursor_byte < app.file_size {
+                data[app.cursor_byte]
             } else {
-                String::new()
+                0
+            };
+            let byte_span = if app.is_color256 && app.cursor_byte < app.file_size {
+                // 256 色模式：字节值背景为其调色板色，前景自适应
+                let bg = Color::Indexed(b);
+                let fg = if indexed_luminance(b) > 128.0 {
+                    Color::Black
+                } else {
+                    Color::White
+                };
+                Span::styled(format!(" [{:02X}]", b), Style::default().fg(fg).bg(bg))
+            } else {
+                Span::raw(format!(" [{:02X}]", b))
             };
             let hex_w = if app.file_size <= 0xff {
                 2
@@ -2064,7 +2076,8 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                         },
                         sp(16),
                     ),
-                    Span::raw(format!("{}  {}  {}", byte_info, offset_str, pack_str)),
+                    byte_span,
+                    Span::raw(format!("  {}  {}", offset_str, pack_str)),
                 ])),
                 Rect::new(0, area.height - 1, area.width, 1),
             );
