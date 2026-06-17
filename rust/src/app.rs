@@ -117,6 +117,7 @@ pub struct App {
     pub is_hslbit_bg: bool,
     pub is_rgbbit_bg: bool,
     pub pending_file: Option<String>,
+    pub pending_data: Option<Vec<u8>>,
     pub menu_selected: usize,
 }
 
@@ -160,6 +161,7 @@ impl App {
             is_hslbit_bg: false,
             is_rgbbit_bg: false,
             pending_file: None,
+            pending_data: None,
             menu_selected: 0,
         }
     }

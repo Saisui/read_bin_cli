@@ -151,12 +151,29 @@ fn main() -> io::Result<()> {
 
             match reopen {
                 Ok(true) => {
-                    // Check if pending_file was set (e.g. Sample menu item)
+                    // Sample 内存数据 → 直接用，不走文件
+                    if let Some(sample) = app.pending_data.take() {
+                        let mut data = sample;
+                        let base_name = "sample".to_string();
+                        let file_size = data.len();
+                        app = App::new(file_size, base_name);
+                        let reopen2 = run(&mut terminal, &mut app, &mut data, "");
+                        match reopen2 {
+                            Ok(true) => {
+                                filename.clear();
+                                continue;
+                            }
+                            _ => {
+                                disable_raw_mode()?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                    // 文件浏览器或 pending_file
                     if let Some(ref path) = app.pending_file {
                         filename = path.clone();
                         app.pending_file = None;
                     } else {
-                        // Ctrl+P: 清空文件名，下轮循环进入文件浏览器
                         filename.clear();
                     }
                 }
@@ -395,10 +412,8 @@ fn handle_mouse_event(
                             app.help_scroll = 0;
                         }
                         1 => {
-                            let sample_path = std::env::temp_dir().join("read-bin-sample.bin");
-                            let sample_data: Vec<u8> = (0u8..=255).collect();
-                            let _ = std::fs::write(&sample_path, &sample_data);
-                            app.pending_file = Some(sample_path.to_string_lossy().to_string());
+                            // Sample: 0x00..0xFF 内存数据，不写文件
+                            app.pending_data = Some((0u8..=255).collect());
                             app.input_mode = InputMode::Normal;
                             *should_break = true;
                         }
