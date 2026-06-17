@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.1.10 (2026-06-18)
+
+### Sample 文件
+- 文件浏览器顶部新增 `*sample (0x00-0xFF)` 条目（斜体青色），回车即可打开 256 字节示例
+- Sample 走正常文件打开流程（临时文件），退出后返回原文件
+
+### 菜单增强
+- MENU 下拉菜单项首字母带下划线（H̲elp / S̲ample / A̲bout）
+- 菜单打开时支持 h/s/a 快捷键直接跳转
+
+### Bug 修复
+- 修复 Sample 闪退：`run()` 返回值未考虑 `pending_file`，导致 Sample 打开后立即退出程序
+- 修复 Sample 写入失败静默忽略：改为检查 `is_ok()` 再设置 pending_file
+
+### 文档
+- About 弹窗添加功能亮点（BitSearch / Sparse Hierarchical Bitmap / 8 色彩模式 / 编辑 / Sample）
+- CODE_NAV.md 更新：InputMode 枚举、FileBrowser、菜单快捷键、废弃代码标注
+- README.md 更新：菜单快捷键、File Browser + *sample
+
+---
+
 ## v0.1.9 (2026-06-18)
 
 ### 新增显示模式
