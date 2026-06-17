@@ -83,6 +83,7 @@ fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let dump = args.iter().any(|a| a == "--dump");
     let track = args.iter().any(|a| a == "--track");
+    let copy_mode = args.iter().any(|a| a == "--copy");
     let lock_mode = args
         .windows(2)
         .find_map(|w| {
@@ -130,10 +131,16 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            let file = if dump {
-                File::open(&filename)?
+            // --copy：复制到临时文件，mmap 快照（外部修改不可见）
+            let (file, temp_path) = if copy_mode && !dump {
+                let tmp = std::env::temp_dir().join(format!("read-bin-{}.tmp", std::process::id()));
+                std::fs::copy(&filename, &tmp)?;
+                let f = OpenOptions::new().read(true).open(&tmp)?;
+                (f, Some(tmp))
+            } else if dump {
+                (File::open(&filename)?, None)
             } else {
-                OpenOptions::new().read(true).open(&filename)?
+                (OpenOptions::new().read(true).open(&filename)?, None)
             };
             // --lock：加文件锁
             if !dump {
@@ -260,14 +267,25 @@ fn main() -> io::Result<()> {
                     }
                 }
                 Ok(false) => {
+                    if let Some(ref tmp) = temp_path {
+                        let _ = std::fs::remove_file(tmp);
+                    }
                     disable_raw_mode()?;
                     return Ok(());
                 }
                 Err(e) => {
+                    // 清理临时文件
+                    if let Some(ref tmp) = temp_path {
+                        let _ = std::fs::remove_file(tmp);
+                    }
                     disable_raw_mode()?;
                     eprintln!("Error: {}", e);
                     return Ok(());
                 }
+            }
+            // 切换文件时清理旧临时文件
+            if let Some(ref tmp) = temp_path {
+                let _ = std::fs::remove_file(tmp);
             }
         }
     })();
