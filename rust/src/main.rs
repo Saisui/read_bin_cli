@@ -2939,7 +2939,7 @@ fn draw_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let dy = area.height.saturating_sub(1).saturating_sub(dh);
     let dialog = Rect::new(dx, dy, dw, dh);
     f.render_widget(Clear, dialog);
-    for (i, item) in items.iter().enumerate() {
+    for i in 0..3 {
         let (base, shortcut) = match i {
             0 => ("Help", 'H'),
             1 => ("Sample", 'S'),
