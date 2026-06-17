@@ -255,7 +255,7 @@ fn handle_mouse_event(
                 // 模式下拉菜单点击（radio behavior for color modes）
                 let dh = 12u16;
                 let dy = area_h.saturating_sub(1) - dh;
-                let dw = 14u16;
+                let dw = 10u16;
                 if mx < dw && my >= dy && my < dy + dh {
                     let sel = my - dy;
                     match sel {
@@ -2863,7 +2863,7 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         (DisplayMode::Hex, "[HEX]  "),
         (DisplayMode::Utf8, "[UTF8] "),
     ];
-    let dw = 14u16;
+    let dw = 10u16;
     let dh = 12u16;
     let dy = area.height.saturating_sub(1) - dh;
     let dx = 0u16;
