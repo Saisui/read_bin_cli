@@ -2920,7 +2920,7 @@ fn draw_about(f: &mut ratatui::Frame, area: Rect) {
         String::new(),
         "github.com/Saisui/read_bin_cli".to_string(),
         String::new(),
-        "License: MIT".to_string(),
+        "License: AGPL-3.0".to_string(),
     ];
     let h = text.len() as u16 + 2;
     let w = 36u16;
