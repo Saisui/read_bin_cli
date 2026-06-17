@@ -1897,7 +1897,13 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
 fn draw_hex(f: &mut ratatui::Frame, app: &App, data_full: &[u8], area: Rect) {
     // 顶栏：文件大小 + 文件名（背景色延伸到行尾）
     let size_str = App::format_size(app.file_size);
-    let top_bar = format!("[{}] {}", size_str.replace(' ', "_"), app.filename);
+    let dirty_prefix = if app.dirty { "* " } else { "" };
+    let top_bar = format!(
+        "[{}] {}{}",
+        size_str.replace(' ', "_"),
+        dirty_prefix,
+        app.filename
+    );
     let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
     let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
     f.render_widget(
