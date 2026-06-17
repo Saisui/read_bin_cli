@@ -384,16 +384,13 @@ impl App {
         }
     }
 
-    /// 还原指定字节到原始值
+    /// 还原指定字节到原始值（不影响 undo/redo 栈）
     pub fn restore_at(&mut self, mmap: &mut [u8], off: usize) {
         if let Some(orig) = self.original_values.remove(&off) {
             if off < self.file_size {
                 mmap[off] = orig;
             }
-            self.undo_stack.retain(|e| e.offset != off);
-            self.redo_stack.retain(|e| e.offset != off);
             self.modified.unmark(off);
-            self.dirty = !self.undo_stack.is_empty();
         }
     }
 
