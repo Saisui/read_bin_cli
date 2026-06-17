@@ -253,7 +253,7 @@ fn handle_mouse_event(
                 }
             } else if app.input_mode == InputMode::ModeSelect {
                 // 模式下拉菜单点击
-                let dh = 8u16;
+                let dh = 9u16;
                 let dy = area_h.saturating_sub(1) - dh;
                 let dw = 10u16;
                 if mx < dw && my >= dy && my < dy + dh {
@@ -266,6 +266,7 @@ fn handle_mouse_event(
                         4 => app.is_rgb_bg = !app.is_rgb_bg,
                         5 => app.is_hsl_bg = !app.is_hsl_bg,
                         6 => app.is_gray_bg = !app.is_gray_bg,
+                        7 => app.is_heat_bg = !app.is_heat_bg,
                         _ => {}
                     }
                     if sel <= 2 {
@@ -647,6 +648,9 @@ fn handle_key_event(
             KeyCode::Char('7') => {
                 app.is_gray_bg = !app.is_gray_bg;
             }
+            KeyCode::Char('8') => {
+                app.is_heat_bg = !app.is_heat_bg;
+            }
             _ => {}
         },
         InputMode::FileBrowser => {
@@ -1024,6 +1028,9 @@ fn handle_normal(
                 app.is_gray_bg = true;
             } else if app.is_gray_bg {
                 app.is_gray_bg = false;
+                app.is_heat_bg = true;
+            } else if app.is_heat_bg {
+                app.is_heat_bg = false;
             } else {
                 app.is_color256 = true;
             }
@@ -1562,6 +1569,21 @@ fn gray_bg(b: u8) -> Color {
     Color::Rgb(b, b, b)
 }
 
+/// 热力图背景色：黑→蓝→红→黄→白 四段线性插值
+fn heat_bg(b: u8) -> Color {
+    let v = b as u16;
+    let (r, g, bl) = if v < 64 {
+        (0, 0, v * 4)
+    } else if v < 128 {
+        ((v - 64) * 4, 0, (128 - v) * 4)
+    } else if v < 192 {
+        (255, (v - 128) * 4, 0)
+    } else {
+        (255, 255, (v - 192) * 4)
+    };
+    Color::Rgb(r as u8, g as u8, bl as u8)
+}
+
 const STD_COLORS: [(u8, u8, u8); 8] = [
     (0, 0, 0),
     (170, 0, 0),
@@ -1788,6 +1810,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         Color::White
                     };
                     resolve(app, go, Style::default().bg(bg).fg(fg), mr)
+                } else if app.is_heat_bg {
+                    let bg = heat_bg(tail_b);
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
+                    resolve(app, go, Style::default().bg(bg).fg(fg), mr)
                 } else if app.is_color256 {
                     let fg = if indexed_luminance(tail_b) > 128.0 {
                         Color::Black
@@ -1895,6 +1925,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                                     Color::White
                                 };
                                 resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
+                            } else if app.is_heat_bg {
+                                let bg = heat_bg(tail_b);
+                                let fg = if color_config::luminance(bg) > 128.0 {
+                                    Color::Black
+                                } else {
+                                    Color::White
+                                };
+                                resolve(app, cgo, Style::default().bg(bg).fg(fg), mr)
                             } else if app.is_color256 {
                                 let fg = if indexed_luminance(tail_b) > 128.0 {
                                     Color::Black
@@ -1935,6 +1973,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             Style::default().bg(bg).fg(fg)
                         } else if app.is_gray_bg {
                             let bg = gray_bg(b);
+                            let fg = if color_config::luminance(bg) > 128.0 {
+                                Color::Black
+                            } else {
+                                Color::White
+                            };
+                            Style::default().bg(bg).fg(fg)
+                        } else if app.is_heat_bg {
+                            let bg = heat_bg(b);
                             let fg = if color_config::luminance(bg) > 128.0 {
                                 Color::Black
                             } else {
@@ -2000,6 +2046,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                             Color::White
                         };
                         Style::default().bg(bg).fg(fg)
+                    } else if app.is_heat_bg {
+                        let bg = heat_bg(b);
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
+                        Style::default().bg(bg).fg(fg)
                     } else if app.is_color256 {
                         let fg = if indexed_luminance(b) > 128.0 {
                             Color::Black
@@ -2051,6 +2105,14 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                         Color::White
                     };
                     Style::default().bg(bg).fg(fg)
+                } else if app.is_heat_bg {
+                    let bg = heat_bg(b);
+                    let fg = if color_config::luminance(bg) > 128.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    };
+                    Style::default().bg(bg).fg(fg)
                 } else if app.is_color256 {
                     let fg = if indexed_luminance(b) > 128.0 {
                         Color::Black
@@ -2062,14 +2124,18 @@ fn build_lines<'a>(app: &App, data_full: &[u8], area: Rect) -> Vec<Line<'a>> {
                     byte_style(b, app.mode)
                 };
                 let sty = resolve(app, go, base, mr);
-                let final_sty =
-                    if app.is_color256 || app.is_rgb_bg || app.is_hsl_bg || app.is_gray_bg {
-                        sty
-                    } else if dim {
-                        dim_bg_10pct(sty)
-                    } else {
-                        sty
-                    };
+                let final_sty = if app.is_color256
+                    || app.is_rgb_bg
+                    || app.is_hsl_bg
+                    || app.is_gray_bg
+                    || app.is_heat_bg
+                {
+                    sty
+                } else if dim {
+                    dim_bg_10pct(sty)
+                } else {
+                    sty
+                };
                 spans.push(Span::styled(byte_disp(b, app.mode), final_sty));
             }
         }
@@ -2106,6 +2172,14 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 Span::styled(format!(" [{:02X}]", b), Style::default().fg(fg).bg(bg))
             } else if app.is_gray_bg && app.cursor_byte < app.file_size {
                 let bg = gray_bg(b);
+                let fg = if color_config::luminance(bg) > 128.0 {
+                    Color::Black
+                } else {
+                    Color::White
+                };
+                Span::styled(format!(" [{:02X}]", b), Style::default().fg(fg).bg(bg))
+            } else if app.is_heat_bg && app.cursor_byte < app.file_size {
+                let bg = heat_bg(b);
                 let fg = if color_config::luminance(bg) > 128.0 {
                     Color::Black
                 } else {
@@ -2280,6 +2354,20 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                         Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
                     })
                     .collect::<Vec<_>>()
+            } else if app.is_heat_bg {
+                let label_chars: Vec<char> = mode_label.chars().collect();
+                label_chars
+                    .iter()
+                    .map(|&c| {
+                        let bg = heat_bg(c as u8);
+                        let fg = if color_config::luminance(bg) > 128.0 {
+                            Color::Black
+                        } else {
+                            Color::White
+                        };
+                        Span::styled(c.to_string(), Style::default().fg(fg).bg(bg))
+                    })
+                    .collect::<Vec<_>>()
             } else if app.is_color256 {
                 let grad = [
                     Color::Rgb(100, 149, 237),
@@ -2314,7 +2402,7 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
         InputMode::ModeSelect => {
             return f.render_widget(
                 Paragraph::new(Span::styled(
-                    "↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB 6:HSL",
+                    "↑↓:select Enter:confirm Esc:cancel 1/2/3:mode 4:256 5:RGB 6:HSL 7:GRAY 8:HEAT",
                     sp(5),
                 )),
                 Rect::new(0, area.height - 1, area.width, 1),
@@ -2533,6 +2621,22 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(gray_checkbox, gray_style)),
         Rect::new(dx, dy + 6, dw, 1),
+    );
+    let heat_checkbox = if app.is_heat_bg {
+        " [x] HEAT "
+    } else {
+        " [ ] HEAT "
+    };
+    let heat_style = if app.is_heat_bg {
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(147, 112, 219))
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(heat_checkbox, heat_style)),
+        Rect::new(dx, dy + 7, dw, 1),
     );
 }
 
