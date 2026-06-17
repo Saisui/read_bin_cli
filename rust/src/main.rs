@@ -22,12 +22,36 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// flock(2) 系统调用（阻止外部修改文件）
+/// flock(2) / fcntl(2) 系统调用
 extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
+    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
 }
 const LOCK_SH: i32 = 1; // 共享锁（允许多个读者，阻止写者）
 const LOCK_EX: i32 = 2; // 独占锁（阻止所有其他访问）
+const LOCK_UN: i32 = 8; // 解锁
+const F_SETLK: i32 = 6; // fcntl 设置锁（非阻塞）
+
+/// fcntl 文件锁结构体（POSIX struct flock）
+#[repr(C)]
+struct Flock {
+    l_type: i16,   // F_RDLCK / F_WRLCK / F_UNLCK
+    l_whence: i16, // SEEK_SET / SEEK_CUR / SEEK_END
+    l_start: i64,  // 锁起始偏移
+    l_len: i64,    // 锁长度（0 = 到文件末尾）
+    l_pid: i32,    // 拥有者 PID（仅 F_GETLK 返回）
+}
+const F_RDLCK: i16 = 0; // 读锁
+const F_WRLCK: i16 = 1; // 写锁
+const F_UNLCK: i16 = 2; // 解锁
+
+/// 锁模式
+#[derive(Clone, Copy, PartialEq)]
+enum LockMode {
+    None,   // 不锁
+    Page4K, // 锁当前 4K 页（fcntl range lock）
+    Full,   // 全文锁（flock LOCK_SH）
+}
 
 use crossterm::{
     event::{
@@ -58,7 +82,21 @@ use app::{App, DisplayMode, InputMode};
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let dump = args.iter().any(|a| a == "--dump");
-    let use_flock = args.iter().any(|a| a == "--flock");
+    let track = args.iter().any(|a| a == "--track");
+    let lock_mode = args
+        .windows(2)
+        .find_map(|w| {
+            if w[0] == "--lock" {
+                match w[1].as_str() {
+                    "4k" | "4K" => Some(LockMode::Page4K),
+                    "full" => Some(LockMode::Full),
+                    _ => Some(LockMode::None),
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or(LockMode::None);
 
     let mut filename = args
         .iter()
@@ -94,11 +132,30 @@ fn main() -> io::Result<()> {
             } else {
                 OpenOptions::new().read(true).open(&filename)?
             };
-            // --flock：加共享锁，阻止外部程序写入文件
-            if use_flock && !dump {
-                let ret = unsafe { flock(file.as_raw_fd(), LOCK_SH) };
-                if ret != 0 {
-                    eprintln!("Warning: flock failed (code {})", ret);
+            // --lock：加文件锁
+            if !dump {
+                match lock_mode {
+                    LockMode::Full => {
+                        let ret = unsafe { flock(file.as_raw_fd(), LOCK_SH) };
+                        if ret != 0 {
+                            eprintln!("Warning: flock failed (code {})", ret);
+                        }
+                    }
+                    LockMode::Page4K => {
+                        // 初始锁第一页
+                        let fl = Flock {
+                            l_type: F_RDLCK,
+                            l_whence: 0, // SEEK_SET
+                            l_start: 0,
+                            l_len: 4096,
+                            l_pid: 0,
+                        };
+                        let ret = unsafe { fcntl(file.as_raw_fd(), F_SETLK, &fl) };
+                        if ret != 0 {
+                            eprintln!("Warning: fcntl lock failed (code {})", ret);
+                        }
+                    }
+                    LockMode::None => {}
                 }
             }
             let file_size = file.metadata()?.len() as usize;
@@ -164,15 +221,26 @@ fn main() -> io::Result<()> {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| filename.clone());
             let mut app = App::new(file_size, base_name);
-            let reopen = run(&mut terminal, &mut app, &mmap, &filename);
+            let reopen = run(
+                &mut terminal,
+                &mut app,
+                &mmap,
+                &filename,
+                track,
+                lock_mode,
+                file.as_raw_fd(),
+            );
 
             match reopen {
                 Ok(true) => {
-                    // pending_file（包括 Sample 临时文件）或文件浏览器
                     if let Some(ref path) = app.pending_file {
+                        // pending_file（包括 Sample 临时文件）
                         filename = path.clone();
                         app.pending_file = None;
+                    } else if track {
+                        // 跟踪模式：文件变化，重新 mmap（filename 不变）
                     } else {
+                        // 文件浏览器
                         filename.clear();
                     }
                 }
@@ -999,11 +1067,27 @@ fn run(
     app: &mut App,
     mmap: &[u8],
     filename: &str,
+    track: bool,
+    lock_mode: LockMode,
+    fd: i32,
 ) -> io::Result<bool> {
     #[cfg(target_os = "windows")]
     let mut last_key_time = std::time::Instant::now();
     let mut reopen_browser = false;
     let mut should_break = false;
+    let mut file_changed = false;
+
+    // 跟踪模式：记录文件初始状态
+    let track_meta: Option<(std::time::SystemTime, u64)> = if track {
+        std::fs::metadata(filename)
+            .ok()
+            .and_then(|m| Some((m.modified().ok()?, m.len())))
+    } else {
+        None
+    };
+
+    // 4K 锁：记录当前锁定的页
+    let mut locked_page: usize = app.cursor_byte / 4096;
 
     loop {
         if should_break {
@@ -1041,8 +1125,27 @@ fn run(
         // render
         render_frame(terminal, app, mmap)?;
 
-        // handle input
-        let evt = event::read()?;
+        // handle input（跟踪模式用 poll 超时，每秒检测文件变化）
+        let evt = if track {
+            if event::poll(std::time::Duration::from_secs(1))? {
+                event::read()?
+            } else {
+                // 超时：检查文件变化
+                if let Some((ref old_mtime, old_size)) = track_meta {
+                    if let Ok(m) = std::fs::metadata(filename) {
+                        let new_size = m.len();
+                        let new_mtime = m.modified().unwrap_or(*old_mtime);
+                        if new_size != old_size || new_mtime != *old_mtime {
+                            file_changed = true;
+                            should_break = true;
+                        }
+                    }
+                }
+                continue;
+            }
+        } else {
+            event::read()?
+        };
         match evt {
             Event::Mouse(mouse) => {
                 handle_mouse_event(
@@ -1078,8 +1181,34 @@ fn run(
             }
             _ => {}
         }
+
+        // 4K 锁：光标移动到不同页时，更新 range lock
+        if lock_mode == LockMode::Page4K {
+            let new_page = app.cursor_byte / 4096;
+            if new_page != locked_page {
+                // 释放旧锁
+                let unlock = Flock {
+                    l_type: F_UNLCK,
+                    l_whence: 0,
+                    l_start: (locked_page * 4096) as i64,
+                    l_len: 4096,
+                    l_pid: 0,
+                };
+                unsafe { fcntl(fd, F_SETLK, &unlock) };
+                // 加新锁
+                let lock = Flock {
+                    l_type: F_RDLCK,
+                    l_whence: 0,
+                    l_start: (new_page * 4096) as i64,
+                    l_len: 4096,
+                    l_pid: 0,
+                };
+                unsafe { fcntl(fd, F_SETLK, &lock) };
+                locked_page = new_page;
+            }
+        }
     }
-    Ok(reopen_browser || app.pending_file.is_some())
+    Ok(reopen_browser || app.pending_file.is_some() || file_changed)
 }
 
 /// 将 mmap + overlay 写入文件
