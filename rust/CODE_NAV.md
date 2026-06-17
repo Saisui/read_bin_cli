@@ -63,7 +63,7 @@ main.rs
 
 ### 底栏点击区域
 ```
-[ASCII]  &1a3f  pack 2/5  Ctrl+H:help
+[ASCII]  & 1a3f  pack 2/5  Ctrl+H:help
   ↑         ↑        ↑           ↑
   模式菜单  跳转字节  跳转页      帮助
 ```
@@ -85,7 +85,7 @@ Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 - 搜索：`search`(BitSearch), `search_active`, `search_len`, `current_match`
 - 编辑：`undo_stack`, `redo_stack`, `dirty`
 - 选区：`sel_start`, `sel_end`, `dragging`
-- 显示：`is_color256`
+- 显示：`is_color256`, `is_rgb_bg`, `is_hsl_bg`, `is_gray_bg`, `is_heat_bg`, `is_hslbit_bg`, `is_rgbbit_bg`
 
 ### 跨页滚动方法
 - `global_total_rows()`：文件总行数

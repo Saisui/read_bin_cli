@@ -27,6 +27,7 @@ Edit:
   PGUP/PGDN   Scroll page
   0-9a-f      Edit nibble (hex)
   any char    Edit byte (ascii/utf8)
+  Alt+↑/↓     Byte value ±1
 
 Selection:
   Mouse drag  Select byte range

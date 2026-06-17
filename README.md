@@ -24,9 +24,22 @@ Click `[ASCII]` in the status bar to open the mode dropdown, or press `m` to cyc
 | HEX | All bytes shown as 2-digit hex |
 | UTF-8 | Decode and display UTF-8 characters |
 
-### 256-Color Mode
+### Color Modes
 
-Toggle with `n` key or the `[256]` checkbox in the mode dropdown. Each byte is rendered with its terminal palette color as background, with auto black/white foreground for readability.
+Toggle with `n` key (cycles through all modes) or select in the mode dropdown.
+
+| Mode | Description |
+|------|-------------|
+| off | No color background |
+| 256 | Each byte background = terminal palette color (Indexed) |
+| RGB | Background from neighbor bytes: R=prev, G=self, B=next |
+| HSL | Background from neighbor bytes: H=prev, L=self, S=next |
+| Gray | Background = grayscale (RGB(v, v, v), v = byte value) |
+| Heat | Heatmap: black→blue→red→yellow→white |
+| hsl | Bit-decomposed HSL: high 4 bits = hue, mid 2 = lightness, low 2 = saturation |
+| rgb | Bit-decomposed RGB: RR_GGGG_BB (2:4:2 bits) |
+
+All color modes use auto-adaptive foreground (black or white based on background luminance).
 
 ## Cross-Page Scrolling
 
@@ -91,6 +104,8 @@ Press `i` to enter edit mode. Press `ESC` to exit.
 | Any character | Edit byte (ASCII/UTF8 mode) |
 | `Enter` | Insert newline (`\n`) in ASCII mode |
 | `Tab` | Insert tab (`\t`) in ASCII mode |
+| `Alt`+`↑` | Byte value +1 (at 0xFF: no change) |
+| `Alt`+`↓` | Byte value -1 (at 0x00: no change) |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
 
