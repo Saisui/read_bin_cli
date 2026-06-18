@@ -668,13 +668,18 @@ fn handle_mouse_event(
                     app.input_mode = InputMode::Normal;
                 }
             } else if my == 0 && app.input_mode == InputMode::Normal {
-                // 点击顶栏 → 检查是否在 [filesize] 或 <mods> 区域
-                let dirty_prefix = if app.dirty { "*" } else { "" };
-                let prefix_len = dirty_prefix.len() + app.filename.len();
-                // 格式: "*filename [size] <mods>"
-                // 点击 filename 之后的区域 → 打开 ModeMenu
-                if mx >= prefix_len as u16 {
-                    // 点击 [filesize] 或 <mods> → 打开 ModeMenu
+                // 点击顶栏 → 格式: "[filesize-mods] *filename"
+                // 点击左侧 [filesize] 区域 → 打开 ModeMenu
+                // 点击右侧 filename 区域 → 打开文件浏览器
+                let size_str = App::format_size(app.file_size);
+                let mods = app.mods_string();
+                let bracket_end = if mods.is_empty() {
+                    format!("[{}] ", size_str.replace(' ', "_")).len()
+                } else {
+                    format!("[{}-{}] ", size_str.replace(' ', "_"), mods).len()
+                };
+                if mx < bracket_end as u16 {
+                    // 点击 [filesize] → 打开 ModeMenu
                     app.input_mode = InputMode::ModeMenu;
                     app.mode_menu_selected = 0;
                 } else {
@@ -2680,20 +2685,19 @@ fn truncate_filename(name: &str, max: usize) -> String {
 }
 
 fn draw_hex(f: &mut ratatui::Frame, app: &App, mmap: &[u8], area: Rect) {
-    // 顶栏：*文件名 [大小] <模式标志>
+    // 顶栏：[大小 - 模式] *文件名
     let size_str = App::format_size(app.file_size);
     let dirty_prefix = if app.dirty { "*" } else { "" };
     let mods = app.mods_string();
 
-    // 计算后缀 "[filesize] <mods>" 的长度
-    let suffix = if mods.is_empty() {
-        format!(" [{}]", size_str.replace(' ', "_"))
+    // 前缀 "[filesize - mods] " 或 "[filesize] "
+    let prefix = if mods.is_empty() {
+        format!("[{}] ", size_str.replace(' ', "_"))
     } else {
-        format!(" [{}] {}", size_str.replace(' ', "_"), mods)
+        format!("[{}-{}] ", size_str.replace(' ', "_"), mods)
     };
-    let suffix_len = suffix.len();
-    let prefix_len = dirty_prefix.len();
-    let available = (area.width as usize).saturating_sub(prefix_len + suffix_len);
+    let prefix_len = prefix.len() + dirty_prefix.len();
+    let available = (area.width as usize).saturating_sub(prefix_len);
 
     // 文件名过长时截断：保留扩展名，中间用 ... 省略
     let display_name = if app.filename.len() > available && available > 6 {
@@ -2702,7 +2706,7 @@ fn draw_hex(f: &mut ratatui::Frame, app: &App, mmap: &[u8], area: Rect) {
         app.filename.clone()
     };
 
-    let top_bar = format!("{}{}{}", dirty_prefix, display_name, suffix);
+    let top_bar = format!("{}{}{}", prefix, dirty_prefix, display_name);
     let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
     let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
     let mut top_style = Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60));
@@ -3867,9 +3871,15 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
 
 /// 计算模式菜单下拉区域的位置和大小
 fn mode_menu_rect(app: &App) -> (u16, u16, u16, u16) {
-    let dirty_prefix = if app.dirty { "*" } else { "" };
-    let prefix_len = dirty_prefix.len() + app.filename.len();
-    let dx = prefix_len as u16;
+    // 下拉菜单在 [filesize] 正下方（左侧）
+    let size_str = App::format_size(app.file_size);
+    let mods = app.mods_string();
+    let prefix = if mods.is_empty() {
+        format!("[{}] ", size_str.replace(' ', "_"))
+    } else {
+        format!("[{}-{}] ", size_str.replace(' ', "_"), mods)
+    };
+    let dx = 0u16;
     let dw = 20u16;
     let dh = 7u16;
     let dy = 1u16;
