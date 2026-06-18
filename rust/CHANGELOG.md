@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.2.0 (2026-06-18)
+
+### mmap + overlay 架构
+- 移除 `to_vec()` 全量拷贝，改用 mmap 只读映射直接读取
+- 编辑内容存储在 overlay HashMap 中，`byte_at()` 优先读 overlay
+- `save_with_overlay()` 写入 mmap + overlay 分段，避免全量拷贝
+- 1GB 文件堆内存从 ~1GB 降至 ~0
+
+### 新增 CLI 参数
+- `--copy`：临时文件快照模式（外部修改不可见）
+- `--track`：50ms 轮询文件变更检测
+- `--inotify`：inotify 事件驱动跟踪（Linux/Android，零延迟）
+- `--immediate` / `--imm`：每次编辑直接 pwrite 写磁盘
+- `--lock none/4k/full`：文件锁定（full 用 flock SH，4k 用 fcntl 范围锁）
+- `--lock-4k` / `--lock-full` / `--unlock`：快捷别名
+- `--help` / `-h`：用法帮助
+
+### 模式菜单
+- 点击顶栏 [filesize] 或按 M 打开模式菜单
+- 运行时切换 Track / Inotify / Immediate / Lock
+- Copy 显示为只读（灰色，底部）
+- 键盘：j/k 导航，Enter/t/n/i/l 快捷切换
+
+### 顶栏
+- 格式改为 `[filesize-mods] *filename`
+- 文件名过长时截断并保留扩展名（`...`）
+- 模式标志：`i`=immediate `f`=full `4`=4k `t`=track `T`=inotify `c`=copy
+- 响应窗口大小变化
+
+### Bug 修复
+- 修复：Sample 闪退（`run()` 返回值未处理 `pending_file`）
+- 修复：`args[0]` 被当作文件名（跳过程序名）
+- 修复：immediate 模式 fd 被立即 drop（File 必须保持存活）
+- 修复：immediate 模式退出应跳过保存确认
+
+### 其他
+- panic hook 自动清理 `--copy` 产生的临时文件
+- flock / fcntl / inotify 运行时动态切换
+- `poll_track_event()` 平台抽象层
+- `flush_byte()` / `flush_last()` 支持 immediate 模式逐字节写入
+
+---
+
 ## v0.1.10 (2026-06-18)
 
 ### Sample 文件

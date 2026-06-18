@@ -1,24 +1,87 @@
 # read_bin
 
-Terminal TUI hex viewer / editor written in Rust.
+Terminal TUI hex viewer / editor written in Rust (v0.2.0).
 
 **Dependencies**: ratatui (TUI framework), crossterm (terminal control), memmap2 (memory-mapped files), arboard (clipboard)
 
 ### Architecture Highlights
 
+- **mmap + overlay**: Files are memory-mapped (zero-copy, no `to_vec`). Edits are stored in an in-memory `HashMap<usize, u8>` overlay that shadows the mmap — only modified bytes are copied, keeping memory proportional to edit count, not file size.
 - **Four-level bitmap search** (BitSearch): 804-byte fixed memory for search indexing, on-demand scanning
 - **Sparse Hierarchical Bitmap** (invented by Saisui): tracks edited bytes with 4K→1MB→1GB→1TB hierarchy, O(1) query, memory proportional to edit count not file size
 - Edited bytes render in **italics** for visual distinction
 
-## Usage
+## CLI Usage
+
+```
+read-bin [file] [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dump` | Plain text hex dump to stdout (no TUI) |
+| `--copy` | Snapshot via temp file — external changes invisible |
+| `--track` | Poll file for external changes every 50ms |
+| `--inotify` | Inotify event-driven tracking (Linux/Android) |
+| `--immediate`, `--imm` | Write-through: flush every edit to disk immediately |
+| `--lock none` | No file lock (default) |
+| `--lock 4k` | fcntl range lock on current 4K page |
+| `--lock full` | flock(LOCK_SH) full file lock |
+| `--lock-4k` | Same as `--lock 4k` |
+| `--lock-full` | Same as `--lock full` |
+| `--unlock` | Same as `--lock none` |
+| `-h`, `--help` | Show help |
+
+### Examples
 
 ```bash
-# TUI mode
-cargo run --release -- <file>
-
-# Plain text hex dump mode
-cargo run --release -- <file> --dump
+read-bin data.bin                   # Open in TUI
+read-bin data.bin --dump            # Plain hex dump
+read-bin data.bin --copy --lock 4k  # Snapshot + 4K lock
+read-bin log.bin --inotify          # Inotify tracking
+read-bin data.bin --immediate       # Edit writes to disk instantly
 ```
+
+## Top Bar
+
+The top bar format is:
+
+```
+[1.2MB-icT] *filename.ext
+```
+
+- **`[filesize]`** — current file size in human-readable units
+- **`-mods`** — active mode flags (omitted when all defaults)
+- **`*`** — present when file has unsaved modifications
+- **filename** — truncated with `...` preserving extension if too long
+
+### Mode Flags
+
+| Flag | Meaning |
+|------|---------|
+| `i` | Immediate (write-through) mode |
+| `f` | Full file lock (`flock`) |
+| `4` | 4K page lock (`fcntl`) |
+| `t` | Track mode (poll every 50ms) |
+| `T` | Inotify tracking (event-driven) |
+| `c` | Copy mode (temp file snapshot) |
+
+Click **`[filesize]`** in the top bar or press **`M`** to open the mode menu.
+
+## Mode Menu
+
+The mode menu lets you toggle runtime modes without restarting:
+
+| Item | Toggleable | Description |
+|------|------------|-------------|
+| Track | ✅ | Poll file changes every 50ms |
+| Inotify | ✅ | Inotify event-driven tracking (mutually exclusive with Track) |
+| Immediate | ✅ | Write-through to disk |
+| Copy | ❌ (set at launch only) | Snapshot via temp file |
+| ───── | — | Separator |
+| Lock: none/4k/full | ✅ | Cycle lock mode: none → 4k → full → none |
+
+All modes except **Copy** can be toggled at runtime via the mode menu or keyboard shortcuts (`M` to open menu, then click/arrow+Enter to toggle).
 
 ## Display Modes
 
@@ -152,8 +215,6 @@ The bottom status bar has clickable regions:
 | `& 00000042` | Goto byte address |
 | `pack 2/5` | Goto page number |
 | `[MENU]` | Open menu — press `h` (Help), `s` (Sample), `a` (About) |
-
-Top bar shows `*filename [size]` when file has unsaved changes (italic).
 
 When searching, the status bar shows:
 `Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear`

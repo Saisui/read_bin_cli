@@ -4,6 +4,8 @@
 
 终端 TUI 十六进制查看/编辑器，Rust 实现。支持跨页无缝滚动、鼠标拖拽选区、256 色渐变。
 
+**v0.2.0 新增**：mmap+overlay 架构、即时写盘（pwrite）、文件变化跟踪（poll/inotify）、文件锁、模式菜单、临时文件快照
+
 **依赖**：ratatui（TUI 框架）、crossterm（终端控制）、memmap2（内存映射文件）、arboard（剪贴板）
 
 **构建**：`cargo build --release`，产物在 `target/release/read-bin`
@@ -12,8 +14,8 @@
 
 ```
 src/
-├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~3345 行）
-├── app.rs           # 应用状态管理（跨页滚动、光标、搜索、undo/redo）
+├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~4100 行）
+├── app.rs           # 应用状态管理（跨页滚动、光标、搜索、undo/redo）（~706 行）
 ├── bitmap.rs        # 四级位图搜索引擎（L0~L3，804 字节固定内存）
 ├── modified.rs      # Sparse Hierarchical Bitmap（稀疏层级位图，追踪编辑字节）
 ├── color_config.rs  # YAML 颜色配置加载 + fg: auto 逻辑
@@ -38,6 +40,97 @@ main.rs
 ```
 用户输入 → handle_*() → App 状态更新 → resolve() → style_for() → 渲染
 ```
+
+---
+
+## v0.2.0 架构变更
+
+### mmap + Overlay 架构
+
+**设计变更**：移除了 `to_vec()` 全量加载。文件通过 mmap 只读映射，所有编辑写入 `overlay: HashMap<usize, u8>`（内存中的脏字节表），保存时通过 `save_with_overlay()` 将 mmap 基础数据与 overlay 合并写回磁盘。
+
+```
+文件磁盘 → mmap (只读) ─┐
+                         ├→ 渲染：先查 overlay，无则用 mmap
+overlay (HashMap<u8>) ───┘
+
+保存：mmap[0..n] 分段 + overlay 填充 → 写文件
+```
+
+**核心函数**：
+- `save_with_overlay()`：分段写入，按 overlay key 排序，合并相邻脏区间，减少 write 系统调用
+- `byte_at()`（app.rs）：overlay-first 字节读取，先查 HashMap，无则读 mmap
+
+### Immediate Mode（即时写盘）
+
+`--immediate` / `--imm` 标志。每次字节编辑立即通过 `pwrite(2)` 写入磁盘，不等用户 Ctrl+S。
+
+- `flush_byte()`：单字节 pwrite，用于光标编辑
+- `flush_last()`：最后一个编辑字节的 pwrite（批量编辑后 flush）
+- 依赖 `pwrite(2)` 系统调用（extern "C"），避免影响 mmap 文件偏移
+
+### Tracking Modes（文件变化跟踪）
+
+检测外部文件修改，自动重新加载。
+
+- `--track`：50ms 轮询检测文件 mtime 变化（`poll_track_event()`）
+- `--inotify`：inotify 事件驱动检测（Linux/Android，`poll_track_event()`）
+- `poll_track_event()`：平台特定事件轮询，返回 `bool`（是否需要重载）
+- `last_modified` 字段：记录上次检测的文件修改时间
+
+### Lock Modes（文件锁）
+
+防止多进程并发写冲突。
+
+- `--lock none`：不加锁（默认）
+- `--lock 4k` / `--lock-4k`：4K 范围锁（fcntl F_SETLK，仅锁当前编辑区域）
+- `--lock full` / `--lock-full`：全文件排他锁（flock LOCK_EX）
+- `--unlock`：运行结束时主动解锁
+- `flag_lock` 字段：`&'static str`，存储当前锁模式名
+
+### CLI 标志
+
+```
+--copy           临时文件快照模式（复制到 temp 目录编辑，保存时写回原文件）
+--track          50ms 轮询跟踪文件变化
+--inotify        inotify 事件驱动跟踪
+--immediate/--imm  每次编辑立即 pwrite 写盘
+--lock none/4k/full  文件锁模式
+--lock-4k        等价 --lock 4k
+--lock-full      等价 --lock full
+--unlock         退出时解锁
+--help / -h      帮助输出
+--dump           纯文本 hex dump 输出（非 TUI）
+```
+
+### Mode Menu（运行时模式切换）
+
+点击顶栏 `[filesize-mods]` 区域或按 `M` 键弹出模式菜单，在运行时切换模式标志。
+
+- `InputMode::ModeMenu`：模式菜单弹窗状态
+- `mode_menu_selected`：菜单当前选中项
+- `draw_mode_menu_dropdown()`：渲染下拉菜单
+- `mode_menu_rect()`：计算菜单位置矩形
+
+**模式标志指示器**（顶栏显示）：
+```
+i=immediate  f=full-lock  4=4k-lock  t=track  T=inotify  c=copy
+```
+
+### 顶栏格式
+
+```
+[1234-5i] *filename.bin        ← 文件大小 + 修改计数 + 模式标志，文件名中间截断
+```
+
+- `truncate_filename()`：文件名中间截断，保留扩展名（`long_na...me.bin`）
+- `mods_string()`（app.rs）：生成模式标志字符串（如 `ift` = immediate+full-lock+track）
+
+### panic hook
+
+注册 `std::panic::set_hook`，panic 时清理 `--copy` 模式创建的临时文件。
+
+---
 
 ## main.rs 导航
 
@@ -83,6 +176,7 @@ main.rs
 - `SearchInput` / `GotoInput` / `GotoByteInput` → `handle_input()`：文本输入
 - `SaveConfirm` → `handle_save()`：y/n 确认
 - `Help` / `Menu` / `About` / `ModeSelect`：各自 ESC 关闭
+- `ModeMenu`：模式菜单选择（↑↓ 导航，Enter 切换，ESC 关闭）
 - `FileBrowser`：文件浏览器模式（Enter 打开文件/目录，ESC 关闭）
 
 **Menu 模式快捷键**：
@@ -96,6 +190,7 @@ main.rs
 - `resolve_auto_fg()`：fg: auto 哨兵 → 实际 black/white
 - `build_lines()`：构建渲染行（跨页渲染，每行独立计算 pack）
 - `draw_hex()` / `draw_status()` / `draw_help()` / `draw_save_dialog()` / `draw_mode_dropdown()`
+- `draw_mode_menu_dropdown()`：模式菜单下拉渲染
 
 ### 底栏点击区域
 ```
@@ -109,20 +204,35 @@ main.rs
 Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 ```
 
+### 核心函数（v0.2.0 新增）
+
+- `save_with_overlay(mmap, overlay, path)`：mmap + overlay 分段合并写入文件
+- `poll_track_event(path, last_modified)`：平台特定文件变化检测（inotify/poll）
+- `flush_byte(fd, offset, byte)`：pwrite 单字节即时写盘
+- `flush_last(fd, offset, byte)`：pwrite 最后编辑字节
+- `truncate_filename(name, max_width)`：文件名中间截断保留扩展名
+- `draw_mode_menu_dropdown(frame, app, rect)`：模式菜单 UI 渲染
+- `mode_menu_rect(app, area)`：模式菜单位置计算
+
+---
+
 ## app.rs 导航
 
 ### 枚举
 - `DisplayMode`：Ascii / Hex / Utf8（含 `next()` / `prev()`）
-- `InputMode`：Normal / Edit / SearchInput / GotoInput / GotoByteInput / StringSearchInput / SaveConfirm / Help / ModeSelect / Menu / About / FileBrowser
+- `InputMode`：Normal / Edit / SearchInput / GotoInput / GotoByteInput / StringSearchInput / SaveConfirm / Help / ModeSelect / **ModeMenu** / Menu / About / FileBrowser
 
 ### App 核心字段
 - 分页：`file_size`, `pack_size`(4096), `total_packs`, `current_pack`, `scroll_top`
 - 光标：`cursor_byte`, `cursor_nibble`（hex 模式的半字节）
 - 搜索：`search`(BitSearch), `search_active`, `search_len`, `current_match`
 - 编辑：`undo_stack`, `redo_stack`, `dirty`, `modified`(ModifiedMap), `original_values`(HashMap)
+- **overlay**：`HashMap<usize, u8>`，mmap+overlay 架构的脏字节表
+- **last_modified**：`Option<usize>`，最后一次修改偏移（immediate mode flush 用）
 - 选区：`sel_start`, `sel_end`, `dragging`
 - 显示：`is_color256`, `is_rgb_bg`, `is_hsl_bg`, `is_gray_bg`, `is_heat_bg`, `is_hslbit_bg`, `is_rgbbit_bg`
-- 菜单：`pending_ctrl_k`, `pending_file`, `menu_selected`
+- 菜单：`pending_ctrl_k`, `pending_file`, `menu_selected`, **`mode_menu_selected`**
+- **模式标志**：`flag_copy`, `flag_track`, `flag_inotify`, `flag_immediate`, `flag_lock`（运行时活跃模式）
 
 ### 跨页滚动方法
 - `global_total_rows()`：文件总行数
@@ -141,6 +251,12 @@ Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 - `modify()` / `undo()` / `redo()`：字节编辑 + 撤销（modify 自动标记到 ModifiedMap + 存原始值）
 - `restore_at()`：还原光标字节到原始值（Ctrl+K,R），不影响 undo/redo
 - `edit_hex()` / `edit_char()`：hex/字符编辑
+
+### v0.2.0 新增方法
+- `byte_at(offset)`：overlay-first 字节读取（先查 HashMap overlay，无则读 mmap）
+- `mods_string()`：生成模式标志字符串（如 `ift` = immediate+full-lock+track）
+
+---
 
 ## color_config.rs 导航
 
@@ -279,6 +395,7 @@ pub fn global_total_rows(&self) -> usize {
 - **常量名**：全大写下划线，如 `AUTO_FG_SENTINEL`、`FIND_CHUNK`
 - **枚举变体**：PascalCase，如 `DisplayMode::Ascii`、`InputMode::Normal`
 - **布尔字段**：`is_`/`has_`/`should_` 前缀，如 `is_color256`、`search_active`、`dirty`
+- **flag 字段**：`flag_` 前缀，如 `flag_copy`、`flag_track`、`flag_immediate`
 - **避免缩写**：用 `scroll_top` 而非 `st`，用 `current_pack` 而非 `cp`
 
 #### 代码风格
