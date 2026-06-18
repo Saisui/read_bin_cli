@@ -9,7 +9,7 @@ Terminal TUI hex viewer / editor written in Rust (v0.1.11).
 ### Architecture Highlights
 
 - **mmap + overlay**: Files are memory-mapped (zero-copy, no `to_vec`). Edits are stored in an in-memory `HashMap<usize, u8>` overlay that shadows the mmap — only modified bytes are copied, keeping memory proportional to edit count, not file size.
-- **Four-level bitmap search** (BitSearch): 804-byte fixed memory for search indexing, on-demand scanning
+- **Four-level bitmap search** (invented by Saisui, BitSearch): 804-byte fixed memory for search indexing, on-demand scanning
 - **Sparse Hierarchical Bitmap** (invented by Saisui): tracks edited bytes with 4K→1MB→1GB→1TB hierarchy, O(1) query, memory proportional to edit count not file size
 - Edited bytes render in **italics** for visual distinction
 

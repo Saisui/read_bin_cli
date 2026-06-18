@@ -16,7 +16,7 @@
 src/
 ├── main.rs          # 入口 + TUI 事件循环 + 渲染 + 输入处理（~4100 行）
 ├── app.rs           # 应用状态管理（跨页滚动、光标、搜索、undo/redo）（~706 行）
-├── bitmap.rs        # 四级位图搜索引擎（L0~L3，804 字节固定内存）
+├── bitmap.rs        # 四级位图搜索引擎（Saisui 发明，L0~L3，804 字节固定内存）
 ├── modified.rs      # Sparse Hierarchical Bitmap（稀疏层级位图，追踪编辑字节）
 ├── color_config.rs  # YAML 颜色配置加载 + fg: auto 逻辑
 ├── search.rs        # 搜索模式解析（hex/nibble/字符串 → Needle）
@@ -28,7 +28,7 @@ src/
 ```
 main.rs
  ├── app.rs          （App 状态、跨页滚动、搜索导航）
- ├── bitmap.rs       （BitSearch 四级位图搜索引擎）
+ ├── bitmap.rs       （BitSearch 四级位图搜索引擎，Saisui 发明）
  ├── modified.rs     （ModifiedMap 稀疏层级位图）
  ├── color_config.rs （ColorConfig 颜色配置）
  ├── search.rs       （Needle 搜索模式解析）
