@@ -608,21 +608,20 @@ fn handle_mouse_event(
                 if mx >= dx && mx < dx + dw && my >= dy && my < dy + dh {
                     let sel = my - dy;
                     match sel {
-                        0 => {} // Copy: 运行时不可切换
-                        1 => {
+                        0 => {
                             app.flag_track = !app.flag_track;
                             if app.flag_track {
                                 app.flag_inotify = false;
                             }
                         }
-                        2 => {
+                        1 => {
                             app.flag_inotify = !app.flag_inotify;
                             if app.flag_inotify {
                                 app.flag_track = false;
                             }
                         }
-                        3 => app.flag_immediate = !app.flag_immediate,
-                        5 => {
+                        2 => app.flag_immediate = !app.flag_immediate,
+                        4 => {
                             // Lock: cycle none → 4k → full → none
                             app.flag_lock = match app.flag_lock {
                                 "" => "4",
@@ -630,7 +629,7 @@ fn handle_mouse_event(
                                 _ => "",
                             };
                         }
-                        _ => {}
+                        _ => {} // 3,5=分隔线 6=Copy(不可切换)
                     }
                 } else {
                     app.input_mode = InputMode::Normal;
@@ -1127,41 +1126,42 @@ fn handle_key_event(
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 app.mode_menu_selected = match app.mode_menu_selected {
-                    5 => 3,
-                    1..=4 => app.mode_menu_selected - 1,
+                    4 => 2, // 跳过分隔线 3
+                    6 => 4, // 跳过分隔线 5
+                    1..=2 => app.mode_menu_selected - 1,
                     _ => 0,
                 };
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 app.mode_menu_selected = match app.mode_menu_selected {
-                    0..=2 => app.mode_menu_selected + 1,
-                    3 => 5,
-                    _ => 5,
+                    0..=1 => app.mode_menu_selected + 1,
+                    2 => 4, // 跳过分隔线 3
+                    4 => 6, // 跳过分隔线 5
+                    _ => 6,
                 };
             }
             KeyCode::Enter | KeyCode::Char(' ') => match app.mode_menu_selected {
-                0 => {} // Copy: 运行时不可切换
-                1 => {
+                0 => {
                     app.flag_track = !app.flag_track;
                     if app.flag_track {
                         app.flag_inotify = false;
                     }
                 }
-                2 => {
+                1 => {
                     app.flag_inotify = !app.flag_inotify;
                     if app.flag_inotify {
                         app.flag_track = false;
                     }
                 }
-                3 => app.flag_immediate = !app.flag_immediate,
-                5 => {
+                2 => app.flag_immediate = !app.flag_immediate,
+                4 => {
                     app.flag_lock = match app.flag_lock {
                         "" => "4",
                         "4" => "f",
                         _ => "",
                     };
                 }
-                _ => {}
+                _ => {} // 6 = Copy: 运行时不可切换
             },
             KeyCode::Char('c') => {} // Copy: 运行时不可切换
             KeyCode::Char('t') => {
@@ -3895,8 +3895,7 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let dialog = Rect::new(dx, dy, dw, dh);
     f.render_widget(Clear, dialog);
 
-    let items: [(bool, &str, bool); 4] = [
-        (app.flag_copy, "Copy", false), // false = 运行时不可切换
+    let items: [(bool, &str, bool); 3] = [
         (app.flag_track, "Track", true),
         (app.flag_inotify, "Inotify", true),
         (app.flag_immediate, "Immediate", true),
@@ -3905,12 +3904,9 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     for (i, (flag, label, toggleable)) in items.iter().enumerate() {
         let sel = i == app.mode_menu_selected;
         let check = if *flag { "[x]" } else { "[ ]" };
-        let suffix = if !toggleable { " *" } else { "" };
-        let text = format!(" {} {}{} ", check, label, suffix);
+        let text = format!(" {} {} ", check, label);
         let sty = if sel {
             Style::default().bg(Color::DarkGray)
-        } else if !toggleable {
-            Style::default().fg(Color::DarkGray)
         } else {
             Style::default()
         };
@@ -3927,7 +3923,7 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
             format!(" {} ", sep),
             Style::default().fg(Color::DarkGray),
         )),
-        Rect::new(dx, dy + 4, dw, 1),
+        Rect::new(dx, dy + 3, dw, 1),
     );
 
     // Lock mode
@@ -3938,7 +3934,7 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         _ => "none",
     };
     let lock_text = format!(" Lock: {} ", lock_label);
-    let lock_sel = app.mode_menu_selected == 5;
+    let lock_sel = app.mode_menu_selected == 4;
     let lock_sty = if lock_sel {
         Style::default().bg(Color::DarkGray)
     } else {
@@ -3946,7 +3942,7 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     };
     f.render_widget(
         Paragraph::new(Span::styled(lock_text, lock_sty)),
-        Rect::new(dx, dy + 5, dw, 1),
+        Rect::new(dx, dy + 4, dw, 1),
     );
 
     // Bottom separator
@@ -3955,6 +3951,19 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
             format!(" {} ", sep),
             Style::default().fg(Color::DarkGray),
         )),
+        Rect::new(dx, dy + 5, dw, 1),
+    );
+
+    // Copy（底部，运行时不可切换）
+    let copy_check = if app.flag_copy { "[x]" } else { "[ ]" };
+    let copy_sel = app.mode_menu_selected == 6;
+    let copy_sty = if copy_sel {
+        Style::default().bg(Color::DarkGray).fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(format!(" {} Copy * ", copy_check), copy_sty)),
         Rect::new(dx, dy + 6, dw, 1),
     );
 }
