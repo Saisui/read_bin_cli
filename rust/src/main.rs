@@ -88,20 +88,27 @@ fn main() -> io::Result<()> {
     let track = args.iter().any(|a| a == "--track" || a == "--inotify");
     let use_inotify = args.iter().any(|a| a == "--inotify");
     let copy_mode = args.iter().any(|a| a == "--copy");
-    let lock_mode = args
-        .windows(2)
-        .find_map(|w| {
-            if w[0] == "--lock" {
-                match w[1].as_str() {
-                    "4k" | "4K" => Some(LockMode::Page4K),
-                    "full" => Some(LockMode::Full),
-                    _ => Some(LockMode::None),
+    let lock_mode = if args.iter().any(|a| a == "--lock-4k") {
+        LockMode::Page4K
+    } else if args.iter().any(|a| a == "--lock-full") {
+        LockMode::Full
+    } else if args.iter().any(|a| a == "--unlock") {
+        LockMode::None
+    } else {
+        args.windows(2)
+            .find_map(|w| {
+                if w[0] == "--lock" {
+                    match w[1].as_str() {
+                        "4k" | "4K" => Some(LockMode::Page4K),
+                        "full" => Some(LockMode::Full),
+                        _ => Some(LockMode::None),
+                    }
+                } else {
+                    None
                 }
-            } else {
-                None
-            }
-        })
-        .unwrap_or(LockMode::None);
+            })
+            .unwrap_or(LockMode::None)
+    };
 
     let mut filename = args
         .iter()
