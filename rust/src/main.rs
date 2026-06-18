@@ -2596,27 +2596,49 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
 
 /// 绘制主视图（hex/ascii/utf8 内容区）
 /// 绘制顶栏（文件名 + 大小）和主视图
+/// 文件名过长时截断：保留扩展名，中间用 ... 省略
+///
+/// 例："very_long_filename_example.txt" (max=20) → "very_lo...ple.txt"
+fn truncate_filename(name: &str, max: usize) -> String {
+    if name.len() <= max {
+        return name.to_string();
+    }
+    // 找扩展名
+    let ext = name.rfind('.').map(|i| &name[i..]).unwrap_or("");
+    let stem = &name[..name.len() - ext.len()];
+    let keep = max.saturating_sub(ext.len() + 3); // 3 = "..."
+    if keep < 2 {
+        return name[..max].to_string();
+    }
+    let head = keep / 2;
+    let tail = keep - head;
+    format!("{}...{}{}", &stem[..head], &stem[stem.len() - tail..], ext)
+}
+
 fn draw_hex(f: &mut ratatui::Frame, app: &App, mmap: &[u8], area: Rect) {
     // 顶栏：*文件名 [大小] <模式标志>
     let size_str = App::format_size(app.file_size);
     let dirty_prefix = if app.dirty { "*" } else { "" };
     let mods = app.mods_string();
-    let top_bar = if mods.is_empty() {
-        format!(
-            "{}{} [{}]",
-            dirty_prefix,
-            app.filename,
-            size_str.replace(' ', "_")
-        )
+
+    // 计算后缀 "[filesize] <mods>" 的长度
+    let suffix = if mods.is_empty() {
+        format!(" [{}]", size_str.replace(' ', "_"))
     } else {
-        format!(
-            "{}{} [{}] {}",
-            dirty_prefix,
-            app.filename,
-            size_str.replace(' ', "_"),
-            mods
-        )
+        format!(" [{}] {}", size_str.replace(' ', "_"), mods)
     };
+    let suffix_len = suffix.len();
+    let prefix_len = dirty_prefix.len();
+    let available = (area.width as usize).saturating_sub(prefix_len + suffix_len);
+
+    // 文件名过长时截断：保留扩展名，中间用 ... 省略
+    let display_name = if app.filename.len() > available && available > 6 {
+        truncate_filename(&app.filename, available)
+    } else {
+        app.filename.clone()
+    };
+
+    let top_bar = format!("{}{}{}", dirty_prefix, display_name, suffix);
     let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
     let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
     let mut top_style = Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60));
