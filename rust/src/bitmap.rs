@@ -105,6 +105,9 @@ fn encode(g3: usize, g2: usize, g1: usize, g0: usize) -> usize {
 // ─── BitSearch ───────────────────────────────────────────
 
 impl BitSearch {
+    /// 创建四级位图搜索引擎
+    ///
+    /// 固定内存 804 字节，按需扫描文件内容。
     pub fn new(needle: Needle, needle_len: usize, label: String, file_size: usize) -> Self {
         Self {
             l0: [0; 512],
@@ -122,6 +125,7 @@ impl BitSearch {
         }
     }
 
+    /// 是否还有未扫描的区域
     pub fn has_more(&self) -> bool {
         self.scanned < self.file_size
     }
@@ -245,6 +249,7 @@ impl BitSearch {
 
     // ─── 查询 ──────────────────────────────────────────
 
+    /// 查找 from 之后的下一个匹配位置，按需扫描新区域
     pub fn next_match_after(&mut self, data: &[u8], from: usize) -> Option<usize> {
         if self.needle_len == 0 {
             return None;
@@ -317,6 +322,7 @@ impl BitSearch {
         }
     }
 
+    /// 查找 from 之前的上一个匹配位置
     pub fn prev_match_before(&mut self, data: &[u8], from: usize) -> Option<usize> {
         if self.needle_len == 0 || from == 0 {
             return None;

@@ -415,6 +415,10 @@ impl App {
         self.overlay.get(&off).copied().unwrap_or(mmap[off])
     }
 
+    /// 修改单字节并记录到撤销栈，同时标记到层级位图
+    ///
+    /// 首次编辑某字节时，将其原始值存入 original_values。
+    /// 修改写入 overlay 而非直接写 mmap。
     pub fn modify(&mut self, mmap: &[u8], off: usize, val: u8) {
         if off < self.file_size && self.byte_at(mmap, off) != val {
             // 首次编辑：存原始值
