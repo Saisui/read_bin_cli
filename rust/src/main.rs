@@ -286,6 +286,16 @@ EXAMPLES:
                     app.modified.mark(off);
                 }
             }
+            // 设置模式标志（顶栏显示）
+            app.flag_copy = copy_mode;
+            app.flag_track = track && !use_inotify;
+            app.flag_inotify = use_inotify;
+            app.flag_immediate = immediate;
+            app.flag_lock = match lock_mode {
+                LockMode::Full => "f",
+                LockMode::Page4K => "4",
+                LockMode::None => "",
+            };
             // 立即模式：打开原文件写入 fd（pwrite 直写磁盘）
             let save_fd = if immediate && !dump {
                 OpenOptions::new()
@@ -2426,15 +2436,26 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
 /// 绘制主视图（hex/ascii/utf8 内容区）
 /// 绘制顶栏（文件名 + 大小）和主视图
 fn draw_hex(f: &mut ratatui::Frame, app: &App, mmap: &[u8], area: Rect) {
-    // 顶栏：*文件名 [大小]
+    // 顶栏：*文件名 [大小] <模式标志>
     let size_str = App::format_size(app.file_size);
     let dirty_prefix = if app.dirty { "*" } else { "" };
-    let top_bar = format!(
-        "{}{} [{}]",
-        dirty_prefix,
-        app.filename,
-        size_str.replace(' ', "_")
-    );
+    let mods = app.mods_string();
+    let top_bar = if mods.is_empty() {
+        format!(
+            "{}{} [{}]",
+            dirty_prefix,
+            app.filename,
+            size_str.replace(' ', "_")
+        )
+    } else {
+        format!(
+            "{}{} [{}] {}",
+            dirty_prefix,
+            app.filename,
+            size_str.replace(' ', "_"),
+            mods
+        )
+    };
     let pad = area.width.saturating_sub(top_bar.len() as u16) as usize;
     let top_bar_full = format!("{}{}", top_bar, " ".repeat(pad));
     let mut top_style = Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60));

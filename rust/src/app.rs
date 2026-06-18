@@ -98,6 +98,12 @@ pub struct App {
     pub overlay: std::collections::HashMap<usize, u8>,
     /// 最后一次修改的偏移量（立即模式 flush 用）
     pub last_modified: Option<usize>,
+    /// 当前活跃的模式标志（顶栏显示）
+    pub flag_copy: bool,
+    pub flag_track: bool,
+    pub flag_inotify: bool,
+    pub flag_immediate: bool,
+    pub flag_lock: &'static str,
     pub modified: crate::modified::ModifiedMap,
     pub original_values: std::collections::HashMap<usize, u8>,
     pub pending_ctrl_k: bool,
@@ -146,6 +152,11 @@ impl App {
             redo_stack: Vec::new(),
             overlay: std::collections::HashMap::new(),
             last_modified: None,
+            flag_copy: false,
+            flag_track: false,
+            flag_inotify: false,
+            flag_immediate: false,
+            flag_lock: "",
             modified: crate::modified::ModifiedMap::new(),
             original_values: std::collections::HashMap::new(),
             pending_ctrl_k: false,
@@ -223,6 +234,32 @@ impl App {
         let g = global_row.min(max_global);
         self.current_pack = g / rows_per_pack;
         self.scroll_top = g % rows_per_pack;
+    }
+
+    /// 返回当前活跃模式的缩写字符串（如 "i f" 或 ""）
+    pub fn mods_string(&self) -> String {
+        let mut mods = Vec::new();
+        if self.flag_immediate {
+            mods.push("i");
+        }
+        if self.flag_lock == "f" {
+            mods.push("f");
+        } else if self.flag_lock == "4" {
+            mods.push("4");
+        }
+        if self.flag_inotify {
+            mods.push("T");
+        } else if self.flag_track {
+            mods.push("t");
+        }
+        if self.flag_copy {
+            mods.push("c");
+        }
+        if mods.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", mods.join(" "))
+        }
     }
 
     /// 将字节数格式化为人类可读大小（如 "1.5KB"、"2.0MB"）
