@@ -261,7 +261,7 @@ impl App {
         if mods.is_empty() {
             String::new()
         } else {
-            format!("<{}>", mods.join(" "))
+            format!("<{}>", mods.join(""))
         }
     }
 
