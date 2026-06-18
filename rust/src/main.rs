@@ -85,6 +85,38 @@ use app::{App, DisplayMode, InputMode};
 /// 终端只创建一次，文件浏览器和查看器共享。
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "\
+read-bin v{ver} — Terminal hex viewer/editor
+
+USAGE: read-bin [file] [options]
+
+OPTIONS:
+  --dump              Plain text hex dump (no TUI)
+  --copy              Snapshot via temp file (external changes invisible)
+  --track             Poll file changes every 50ms
+  --inotify           Inotify event-driven tracking (Linux/Android)
+  --immediate, --imm  Write-through: flush edits to disk immediately
+  --lock none         No lock (default)
+  --lock 4k           fcntl range lock on current 4K page
+  --lock full         flock(LOCK_SH) full file lock
+  --lock-4k           Same as --lock 4k
+  --lock-full         Same as --lock full
+  --unlock            Same as --lock none
+  -h, --help          Show this help
+
+EXAMPLES:
+  read-bin data.bin                   Open file
+  read-bin data.bin --copy --lock 4k  Snapshot + 4K lock
+  read-bin log.bin --inotify          Inotify tracking
+  read-bin data.bin --immediate       Edit writes to disk instantly",
+            ver = env!("CARGO_PKG_VERSION")
+        );
+        return Ok(());
+    }
+
     let dump = args.iter().any(|a| a == "--dump");
     let track = args.iter().any(|a| a == "--track" || a == "--inotify");
     let use_inotify = args.iter().any(|a| a == "--inotify");
