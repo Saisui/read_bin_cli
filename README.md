@@ -1,6 +1,6 @@
 # read_bin
 
-Terminal TUI hex viewer / editor written in Rust (v0.2.0).
+Terminal TUI hex viewer / editor written in Rust (v0.1.11).
 
 **Dependencies**: ratatui (TUI framework), crossterm (terminal control), memmap2 (memory-mapped files), arboard (clipboard)
 

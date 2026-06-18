@@ -3632,26 +3632,13 @@ fn draw_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
 }
 
 /// 绘制 About 弹窗（居中显示版本、作者、仓库、许可证）
+/// About text content (from about.txt, compiled in)
+const ABOUT_LINES: &str = include_str!("../about.txt");
+
 fn draw_about(f: &mut ratatui::Frame, area: Rect) {
-    let ver = env!("CARGO_PKG_VERSION");
-    let text = vec![
-        format!("read-bin v{}", ver),
-        String::new(),
-        "Terminal hex viewer/editor".to_string(),
-        "Author: Saisui".to_string(),
-        String::new(),
-        "Features:".to_string(),
-        "  BitSearch 4-lv bitmap (804B)".to_string(),
-        "  Sparse Hierarchical Bitmap".to_string(),
-        "  8 color modes".to_string(),
-        "  Edit + undo/redo".to_string(),
-        "  Sample file (0x00-0xFF)".to_string(),
-        String::new(),
-        "github.com/Saisui/read_bin_cli".to_string(),
-        "License: AGPL-3.0".to_string(),
-    ];
+    let text: Vec<&str> = ABOUT_LINES.lines().collect();
     let h = text.len() as u16 + 2;
-    let w = 36u16;
+    let w = 42u16;
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect::new(x, y, w, h);

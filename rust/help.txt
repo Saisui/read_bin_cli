@@ -41,6 +41,7 @@ File:
 
 Display:
   m / Alt+M   Cycle mode (ASCII/HEX/UTF8)
+  M           Open mode menu
   n           Cycle 256-color / RGB / HSL / Gray / Heat / hsl / rgb / off
   Click [ASCII] Open mode dropdown
 
@@ -48,6 +49,13 @@ Status bar (clickable):
   &address    Goto byte address
   pack        Goto page number
   Ctrl+H      This help
+
+Mode flags (--flags shown in top bar):
+  --copy      Copy mode
+  --track     Track mode
+  --inotify   Inotify mode
+  --immediate Immediate mode
+  --lock      Lock mode
 
 Other:
   Ctrl+Z / Y  Undo / Redo

@@ -1,0 +1,19 @@
+read-bin v0.1.11
+
+Terminal hex viewer/editor
+Author: Saisui
+
+Features:
+  BitSearch 4-lv bitmap (804B)
+  Sparse Hierarchical Bitmap
+  8 color modes
+  Edit + undo/redo
+  Sample file (0x00-0xFF)
+  Bitwise & mask search
+  --copy / --track / --inotify
+  --immediate / --lock flags
+  Mode menu (M key)
+  Top-bar mode flags
+
+github.com/Saisui/read_bin_cli
+License: AGPL-3.0

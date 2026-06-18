@@ -4,7 +4,7 @@
 
 终端 TUI 十六进制查看/编辑器，Rust 实现。支持跨页无缝滚动、鼠标拖拽选区、256 色渐变。
 
-**v0.2.0 新增**：mmap+overlay 架构、即时写盘（pwrite）、文件变化跟踪（poll/inotify）、文件锁、模式菜单、临时文件快照
+**v0.1.11 新增**：mmap+overlay 架构、即时写盘（pwrite）、文件变化跟踪（poll/inotify）、文件锁、模式菜单、临时文件快照
 
 **依赖**：ratatui（TUI 框架）、crossterm（终端控制）、memmap2（内存映射文件）、arboard（剪贴板）
 
@@ -43,7 +43,7 @@ main.rs
 
 ---
 
-## v0.2.0 架构变更
+## v0.1.11 架构变更
 
 ### mmap + Overlay 架构
 
@@ -204,7 +204,7 @@ i=immediate  f=full-lock  4=4k-lock  t=track  T=inotify  c=copy
 Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 ```
 
-### 核心函数（v0.2.0 新增）
+### 核心函数（v0.1.11 新增）
 
 - `save_with_overlay(mmap, overlay, path)`：mmap + overlay 分段合并写入文件
 - `poll_track_event(path, last_modified)`：平台特定文件变化检测（inotify/poll）
@@ -252,7 +252,7 @@ Search: "4f2a" [3/5678+] @3/ff  ↑↓:next ESC:clear
 - `restore_at()`：还原光标字节到原始值（Ctrl+K,R），不影响 undo/redo
 - `edit_hex()` / `edit_char()`：hex/字符编辑
 
-### v0.2.0 新增方法
+### v0.1.11 新增方法
 - `byte_at(offset)`：overlay-first 字节读取（先查 HashMap overlay，无则读 mmap）
 - `mods_string()`：生成模式标志字符串（如 `ift` = immediate+full-lock+track）
 
