@@ -58,6 +58,7 @@ pub enum InputMode {
     SaveConfirm,
     Help,
     ModeSelect,
+    ModeMenu,
     FileBrowser,
     Menu,
     About,
@@ -130,6 +131,7 @@ pub struct App {
     pub is_rgbbit_bg: bool,
     pub pending_file: Option<String>,
     pub menu_selected: usize,
+    pub mode_menu_selected: usize,
 }
 
 impl App {
@@ -183,6 +185,7 @@ impl App {
             is_rgbbit_bg: false,
             pending_file: None,
             menu_selected: 0,
+            mode_menu_selected: 0,
         }
     }
 

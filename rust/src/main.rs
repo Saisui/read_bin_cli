@@ -316,14 +316,19 @@ EXAMPLES:
                 LockMode::Page4K => "4",
                 LockMode::None => "",
             };
-            // 立即模式：打开原文件写入 fd（pwrite 直写磁盘）
+            // 立即模式：打开写入 fd（File 必须保持存活，否则 fd 被关闭）
+            let _save_file;
             let save_fd = if immediate && !dump {
-                OpenOptions::new()
-                    .write(true)
-                    .open(&filename)
-                    .map(|f| f.as_raw_fd())
-                    .unwrap_or(-1)
+                match OpenOptions::new().write(true).open(&filename) {
+                    Ok(f) => {
+                        let fd = f.as_raw_fd();
+                        _save_file = Some(f);
+                        fd
+                    }
+                    Err(_) => -1,
+                }
             } else {
+                _save_file = None;
                 -1
             };
             let reopen = run(
@@ -420,6 +425,11 @@ fn render_frame(
                 draw_hex(f, app, mmap, area);
                 draw_status(f, app, mmap, area);
                 draw_mode_dropdown(f, app, area);
+            }
+            InputMode::ModeMenu => {
+                draw_hex(f, app, mmap, area);
+                draw_status(f, app, mmap, area);
+                draw_mode_menu_dropdown(f, app, area);
             }
             InputMode::Menu => {
                 draw_hex(f, app, mmap, area);
@@ -592,6 +602,39 @@ fn handle_mouse_event(
                 } else {
                     app.input_mode = InputMode::Normal;
                 }
+            } else if app.input_mode == InputMode::ModeMenu {
+                // ModeMenu 点击处理
+                let (dx, dy, dw, dh) = mode_menu_rect(app);
+                if mx >= dx && mx < dx + dw && my >= dy && my < dy + dh {
+                    let sel = my - dy;
+                    match sel {
+                        0 => app.flag_copy = !app.flag_copy,
+                        1 => {
+                            app.flag_track = !app.flag_track;
+                            if app.flag_track {
+                                app.flag_inotify = false;
+                            }
+                        }
+                        2 => {
+                            app.flag_inotify = !app.flag_inotify;
+                            if app.flag_inotify {
+                                app.flag_track = false;
+                            }
+                        }
+                        3 => app.flag_immediate = !app.flag_immediate,
+                        5 => {
+                            // Lock: cycle none → 4k → full → none
+                            app.flag_lock = match app.flag_lock {
+                                "" => "4",
+                                "4" => "f",
+                                _ => "",
+                            };
+                        }
+                        _ => {}
+                    }
+                } else {
+                    app.input_mode = InputMode::Normal;
+                }
             } else if app.input_mode == InputMode::About {
                 app.input_mode = InputMode::Normal;
             } else if app.input_mode == InputMode::Menu {
@@ -625,9 +668,20 @@ fn handle_mouse_event(
                     app.input_mode = InputMode::Normal;
                 }
             } else if my == 0 && app.input_mode == InputMode::Normal {
-                // 点击顶栏 → 打开文件浏览器
-                *reopen_browser = true;
-                *should_break = true;
+                // 点击顶栏 → 检查是否在 [filesize] 或 <mods> 区域
+                let dirty_prefix = if app.dirty { "*" } else { "" };
+                let prefix_len = dirty_prefix.len() + app.filename.len();
+                // 格式: "*filename [size] <mods>"
+                // 点击 filename 之后的区域 → 打开 ModeMenu
+                if mx >= prefix_len as u16 {
+                    // 点击 [filesize] 或 <mods> → 打开 ModeMenu
+                    app.input_mode = InputMode::ModeMenu;
+                    app.mode_menu_selected = 0;
+                } else {
+                    // 点击文件名 → 打开文件浏览器
+                    *reopen_browser = true;
+                    *should_break = true;
+                }
             } else if my >= 2 && mx >= 4 && my < area_h.saturating_sub(1) {
                 // 点击数据区 → 定位光标 + 开始选区
                 let global_row = my as usize - 2 + app.global_scroll_top();
@@ -1062,6 +1116,71 @@ fn handle_key_event(
             }
             _ => {}
         },
+        InputMode::ModeMenu => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.mode_menu_selected = match app.mode_menu_selected {
+                    5 => 3,
+                    1..=4 => app.mode_menu_selected - 1,
+                    _ => 0,
+                };
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.mode_menu_selected = match app.mode_menu_selected {
+                    0..=2 => app.mode_menu_selected + 1,
+                    3 => 5,
+                    _ => 5,
+                };
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => match app.mode_menu_selected {
+                0 => app.flag_copy = !app.flag_copy,
+                1 => {
+                    app.flag_track = !app.flag_track;
+                    if app.flag_track {
+                        app.flag_inotify = false;
+                    }
+                }
+                2 => {
+                    app.flag_inotify = !app.flag_inotify;
+                    if app.flag_inotify {
+                        app.flag_track = false;
+                    }
+                }
+                3 => app.flag_immediate = !app.flag_immediate,
+                5 => {
+                    app.flag_lock = match app.flag_lock {
+                        "" => "4",
+                        "4" => "f",
+                        _ => "",
+                    };
+                }
+                _ => {}
+            },
+            KeyCode::Char('c') => app.flag_copy = !app.flag_copy,
+            KeyCode::Char('t') => {
+                app.flag_track = !app.flag_track;
+                if app.flag_track {
+                    app.flag_inotify = false;
+                }
+            }
+            KeyCode::Char('n') => {
+                app.flag_inotify = !app.flag_inotify;
+                if app.flag_inotify {
+                    app.flag_track = false;
+                }
+            }
+            KeyCode::Char('i') => app.flag_immediate = !app.flag_immediate,
+            KeyCode::Char('l') => {
+                app.flag_lock = match app.flag_lock {
+                    "" => "4",
+                    "4" => "f",
+                    _ => "",
+                };
+            }
+            _ => {}
+        },
         InputMode::About => match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 app.input_mode = InputMode::Normal;
@@ -1271,7 +1390,7 @@ fn run(
     track: bool,
     use_inotify: bool,
     immediate: bool,
-    save_fd: i32,
+    mut save_fd: i32,
     lock_mode: LockMode,
     fd: i32,
 ) -> io::Result<bool> {
@@ -1416,6 +1535,14 @@ fn run(
                 );
             }
             _ => {}
+        }
+
+        // 立即模式：运行时动态开启时，打开写入 fd
+        if app.flag_immediate && save_fd < 0 {
+            if let Ok(f) = OpenOptions::new().write(true).open(filename) {
+                save_fd = f.as_raw_fd();
+                std::mem::forget(f); // 防止 drop 关闭 fd
+            }
         }
 
         // 4K 锁：光标移动到不同页时，更新 range lock
@@ -1735,6 +1862,10 @@ fn handle_normal(
             app.help_scroll = 0;
         }
         KeyCode::Char('m') => app.mode = app.mode.next(),
+        KeyCode::Char('M') => {
+            app.input_mode = InputMode::ModeMenu;
+            app.mode_menu_selected = 0;
+        }
         KeyCode::Char('n') => {
             if app.is_color256 {
                 app.is_color256 = false;
@@ -3332,6 +3463,15 @@ fn draw_status(f: &mut ratatui::Frame, app: &App, data: &[u8], area: Rect) {
                 Rect::new(0, area.height - 1, area.width, 1),
             );
         }
+        InputMode::ModeMenu => {
+            return f.render_widget(
+                Paragraph::new(Span::styled(
+                    "↑↓:navigate Enter/c:toggle t/n/i/l:shortcut Esc:close",
+                    sp(5),
+                )),
+                Rect::new(0, area.height - 1, area.width, 1),
+            );
+        }
         InputMode::FileBrowser => {
             return f.render_widget(
                 Paragraph::new(Span::styled("File Browser", sp(5))),
@@ -3637,6 +3777,87 @@ fn draw_mode_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
         };
         f.render_widget(Paragraph::new(line), row_rect);
     }
+}
+
+/// 计算模式菜单下拉区域的位置和大小
+fn mode_menu_rect(app: &App) -> (u16, u16, u16, u16) {
+    let dirty_prefix = if app.dirty { "*" } else { "" };
+    let prefix_len = dirty_prefix.len() + app.filename.len();
+    let dx = prefix_len as u16;
+    let dw = 20u16;
+    let dh = 7u16;
+    let dy = 1u16;
+    (dx, dy, dw, dh)
+}
+
+/// 绘制模式标志下拉菜单（Copy/Track/Inotify/Immediate/Lock）
+///
+/// 位置：顶栏 [filesize] 区域正下方
+fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let (dx, dy, dw, dh) = mode_menu_rect(app);
+
+    let dialog = Rect::new(dx, dy, dw, dh);
+    f.render_widget(Clear, dialog);
+
+    let items: [(bool, &str); 4] = [
+        (app.flag_copy, "Copy"),
+        (app.flag_track, "Track"),
+        (app.flag_inotify, "Inotify"),
+        (app.flag_immediate, "Immediate"),
+    ];
+
+    for (i, (flag, label)) in items.iter().enumerate() {
+        let sel = i == app.mode_menu_selected;
+        let check = if *flag { "[x]" } else { "[ ]" };
+        let text = format!(" {} {} ", check, label);
+        let sty = if sel {
+            Style::default().bg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+        f.render_widget(
+            Paragraph::new(Span::styled(text, sty)),
+            Rect::new(dx, dy + i as u16, dw, 1),
+        );
+    }
+
+    // Separator
+    let sep = "─".repeat((dw as usize).saturating_sub(2));
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {} ", sep),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Rect::new(dx, dy + 4, dw, 1),
+    );
+
+    // Lock mode
+    let lock_label = match app.flag_lock {
+        "" => "none",
+        "4" => "4k",
+        "f" => "full",
+        _ => "none",
+    };
+    let lock_text = format!(" Lock: {} ", lock_label);
+    let lock_sel = app.mode_menu_selected == 5;
+    let lock_sty = if lock_sel {
+        Style::default().bg(Color::DarkGray)
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(lock_text, lock_sty)),
+        Rect::new(dx, dy + 5, dw, 1),
+    );
+
+    // Bottom separator
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {} ", sep),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Rect::new(dx, dy + 6, dw, 1),
+    );
 }
 
 /// 绘制文件浏览器
