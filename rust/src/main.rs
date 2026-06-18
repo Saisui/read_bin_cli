@@ -608,7 +608,7 @@ fn handle_mouse_event(
                 if mx >= dx && mx < dx + dw && my >= dy && my < dy + dh {
                     let sel = my - dy;
                     match sel {
-                        0 => app.flag_copy = !app.flag_copy,
+                        0 => {} // Copy: 运行时不可切换
                         1 => {
                             app.flag_track = !app.flag_track;
                             if app.flag_track {
@@ -1135,7 +1135,7 @@ fn handle_key_event(
                 };
             }
             KeyCode::Enter | KeyCode::Char(' ') => match app.mode_menu_selected {
-                0 => app.flag_copy = !app.flag_copy,
+                0 => {} // Copy: 运行时不可切换
                 1 => {
                     app.flag_track = !app.flag_track;
                     if app.flag_track {
@@ -1158,7 +1158,7 @@ fn handle_key_event(
                 }
                 _ => {}
             },
-            KeyCode::Char('c') => app.flag_copy = !app.flag_copy,
+            KeyCode::Char('c') => {} // Copy: 运行时不可切换
             KeyCode::Char('t') => {
                 app.flag_track = !app.flag_track;
                 if app.flag_track {
@@ -1391,7 +1391,7 @@ fn run(
     use_inotify: bool,
     immediate: bool,
     mut save_fd: i32,
-    lock_mode: LockMode,
+    mut lock_mode: LockMode,
     fd: i32,
 ) -> io::Result<bool> {
     #[cfg(target_os = "windows")]
@@ -1466,8 +1466,8 @@ fn run(
         // render
         render_frame(terminal, app, mmap)?;
 
-        // handle input
-        let evt = if track {
+        // handle input（跟踪/inotify 模式用 poll，否则阻塞读取）
+        let evt = if app.flag_track || app.flag_inotify {
             match poll_track_event(
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 inotify_opt.as_ref(),
@@ -1535,6 +1535,70 @@ fn run(
                 );
             }
             _ => {}
+        }
+
+        // inotify：运行时动态开启
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if app.flag_inotify && inotify_opt.is_none() {
+            if let Ok(mut inot) = Inotify::init() {
+                if inot
+                    .add_watch(
+                        std::path::Path::new(filename),
+                        WatchMask::MODIFY | WatchMask::MOVE_SELF | WatchMask::DELETE_SELF,
+                    )
+                    .is_ok()
+                {
+                    inotify_opt = Some(inot);
+                }
+            }
+        }
+
+        // lock：运行时切换锁模式
+        {
+            let new_lock = match app.flag_lock {
+                "f" => LockMode::Full,
+                "4" => LockMode::Page4K,
+                _ => LockMode::None,
+            };
+            if new_lock != lock_mode {
+                // 释放旧锁
+                match lock_mode {
+                    LockMode::Full => {
+                        unsafe { flock(fd, LOCK_UN) };
+                    }
+                    LockMode::Page4K => {
+                        let fl = Flock {
+                            l_type: F_UNLCK,
+                            l_whence: 0,
+                            l_start: 0,
+                            l_len: 0,
+                            l_pid: 0,
+                        };
+                        unsafe { fcntl(fd, F_SETLK, &fl) };
+                    }
+                    LockMode::None => {}
+                }
+                // 加新锁
+                match new_lock {
+                    LockMode::Full => {
+                        unsafe { flock(fd, LOCK_SH) };
+                    }
+                    LockMode::Page4K => {
+                        let page = (app.cursor_byte / 4096) as i64;
+                        let fl = Flock {
+                            l_type: F_RDLCK,
+                            l_whence: 0,
+                            l_start: page * 4096,
+                            l_len: 4096,
+                            l_pid: 0,
+                        };
+                        unsafe { fcntl(fd, F_SETLK, &fl) };
+                    }
+                    LockMode::None => {}
+                }
+                lock_mode = new_lock;
+                locked_page = app.cursor_byte / 4096;
+            }
         }
 
         // 立即模式：运行时动态开启时，打开写入 fd
@@ -3821,19 +3885,22 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let dialog = Rect::new(dx, dy, dw, dh);
     f.render_widget(Clear, dialog);
 
-    let items: [(bool, &str); 4] = [
-        (app.flag_copy, "Copy"),
-        (app.flag_track, "Track"),
-        (app.flag_inotify, "Inotify"),
-        (app.flag_immediate, "Immediate"),
+    let items: [(bool, &str, bool); 4] = [
+        (app.flag_copy, "Copy", false), // false = 运行时不可切换
+        (app.flag_track, "Track", true),
+        (app.flag_inotify, "Inotify", true),
+        (app.flag_immediate, "Immediate", true),
     ];
 
-    for (i, (flag, label)) in items.iter().enumerate() {
+    for (i, (flag, label, toggleable)) in items.iter().enumerate() {
         let sel = i == app.mode_menu_selected;
         let check = if *flag { "[x]" } else { "[ ]" };
-        let text = format!(" {} {} ", check, label);
+        let suffix = if !toggleable { " *" } else { "" };
+        let text = format!(" {} {}{} ", check, label, suffix);
         let sty = if sel {
             Style::default().bg(Color::DarkGray)
+        } else if !toggleable {
+            Style::default().fg(Color::DarkGray)
         } else {
             Style::default()
         };
