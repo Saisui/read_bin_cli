@@ -159,6 +159,7 @@ EXAMPLES:
 
     let mut filename = args
         .iter()
+        .skip(1) // 跳过 args[0]（程序自身路径）
         .find(|a| !a.starts_with("--"))
         .cloned()
         .unwrap_or_default();
@@ -356,7 +357,9 @@ EXAMPLES:
                 Ok(false) => {
                     if let Some(ref tmp) = temp_path {
                         let _ = std::fs::remove_file(tmp);
-                        if let Ok(mut guard) = TEMP_FILE.lock() { *guard = None; }
+                        if let Ok(mut guard) = TEMP_FILE.lock() {
+                            *guard = None;
+                        }
                     }
                     disable_raw_mode()?;
                     return Ok(());
@@ -364,7 +367,9 @@ EXAMPLES:
                 Err(e) => {
                     if let Some(ref tmp) = temp_path {
                         let _ = std::fs::remove_file(tmp);
-                        if let Ok(mut guard) = TEMP_FILE.lock() { *guard = None; }
+                        if let Ok(mut guard) = TEMP_FILE.lock() {
+                            *guard = None;
+                        }
                     }
                     disable_raw_mode()?;
                     eprintln!("Error: {}", e);
@@ -373,7 +378,9 @@ EXAMPLES:
             }
             if let Some(ref tmp) = temp_path {
                 let _ = std::fs::remove_file(tmp);
-                if let Ok(mut guard) = TEMP_FILE.lock() { *guard = None; }
+                if let Ok(mut guard) = TEMP_FILE.lock() {
+                    *guard = None;
+                }
             }
         }
     })();
