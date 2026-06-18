@@ -20,6 +20,7 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 
 /// flock(2) / fcntl(2) / pwrite(2) 系统调用
@@ -84,6 +85,18 @@ use app::{App, DisplayMode, InputMode};
 /// 无参数时进入文件浏览器，Ctrl+P 可随时重新打开文件浏览器。
 /// 终端只创建一次，文件浏览器和查看器共享。
 fn main() -> io::Result<()> {
+    // panic hook：panic 时清理临时文件
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Ok(mut guard) = TEMP_FILE.lock() {
+            if let Some(ref path) = *guard {
+                let _ = std::fs::remove_file(path);
+            }
+            *guard = None;
+        }
+        default_hook(info);
+    }));
+
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -187,6 +200,12 @@ EXAMPLES:
             } else {
                 (OpenOptions::new().read(true).open(&filename)?, None)
             };
+            // 注册临时文件路径（panic hook 清理用）
+            if let Some(ref tmp) = temp_path {
+                if let Ok(mut guard) = TEMP_FILE.lock() {
+                    *guard = Some(tmp.to_string_lossy().to_string());
+                }
+            }
             // --lock：加文件锁
             if !dump {
                 match lock_mode {
@@ -337,23 +356,24 @@ EXAMPLES:
                 Ok(false) => {
                     if let Some(ref tmp) = temp_path {
                         let _ = std::fs::remove_file(tmp);
+                        if let Ok(mut guard) = TEMP_FILE.lock() { *guard = None; }
                     }
                     disable_raw_mode()?;
                     return Ok(());
                 }
                 Err(e) => {
-                    // 清理临时文件
                     if let Some(ref tmp) = temp_path {
                         let _ = std::fs::remove_file(tmp);
+                        if let Ok(mut guard) = TEMP_FILE.lock() { *guard = None; }
                     }
                     disable_raw_mode()?;
                     eprintln!("Error: {}", e);
                     return Ok(());
                 }
             }
-            // 切换文件时清理旧临时文件
             if let Some(ref tmp) = temp_path {
                 let _ = std::fs::remove_file(tmp);
+                if let Ok(mut guard) = TEMP_FILE.lock() { *guard = None; }
             }
         }
     })();
@@ -1929,6 +1949,9 @@ fn parse_hex_input(s: &str) -> Option<usize> {
 
 // ─── 渲染 ──────────────────────────────────────────────────
 static COLOR_CFG: OnceLock<color_config::ColorConfig> = OnceLock::new();
+
+/// panic hook 清理用的临时文件路径
+static TEMP_FILE: Mutex<Option<String>> = Mutex::new(None);
 
 /// 初始化全局颜色配置
 pub fn init_colors(path: &std::path::Path) -> Result<(), String> {
