@@ -22,10 +22,11 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// flock(2) / fcntl(2) 系统调用
+/// flock(2) / fcntl(2) / pwrite(2) 系统调用
 extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    fn pwrite(fd: i32, buf: *const u8, count: usize, offset: i64) -> isize;
 }
 const LOCK_SH: i32 = 1; // 共享锁（允许多个读者，阻止写者）
 const LOCK_EX: i32 = 2; // 独占锁（阻止所有其他访问）
@@ -88,6 +89,7 @@ fn main() -> io::Result<()> {
     let track = args.iter().any(|a| a == "--track" || a == "--inotify");
     let use_inotify = args.iter().any(|a| a == "--inotify");
     let copy_mode = args.iter().any(|a| a == "--copy");
+    let immediate = args.iter().any(|a| a == "--immediate" || a == "--imm");
     let lock_mode = if args.iter().any(|a| a == "--lock-4k") {
         LockMode::Page4K
     } else if args.iter().any(|a| a == "--lock-full") {
@@ -252,6 +254,16 @@ fn main() -> io::Result<()> {
                     app.modified.mark(off);
                 }
             }
+            // 立即模式：打开原文件写入 fd（pwrite 直写磁盘）
+            let save_fd = if immediate && !dump {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&filename)
+                    .map(|f| f.as_raw_fd())
+                    .unwrap_or(-1)
+            } else {
+                -1
+            };
             let reopen = run(
                 &mut terminal,
                 &mut app,
@@ -259,6 +271,8 @@ fn main() -> io::Result<()> {
                 &filename,
                 track,
                 use_inotify,
+                immediate,
+                save_fd,
                 lock_mode,
                 file.as_raw_fd(),
             );
@@ -692,6 +706,7 @@ fn handle_key_event(
     filename: &str,
     th: u16,
     max_rows: usize,
+    save_fd: i32,
     reopen_browser: &mut bool,
     should_break: &mut bool,
 ) {
@@ -727,11 +742,13 @@ fn handle_key_event(
             KeyCode::Char('z') => {
                 // 撤销
                 app.undo(mmap);
+                flush_last(app, mmap, save_fd);
                 return;
             }
             KeyCode::Char('y') => {
                 // 重做
                 app.redo(mmap);
+                flush_last(app, mmap, save_fd);
                 return;
             }
             KeyCode::Char('q') => {
@@ -883,6 +900,7 @@ fn handle_key_event(
                     let val = app.byte_at(mmap, app.cursor_byte);
                     if val < 0xFF {
                         app.modify(mmap, app.cursor_byte, val + 1);
+                        flush_last(app, mmap, save_fd);
                     }
                 }
                 return;
@@ -892,6 +910,7 @@ fn handle_key_event(
                     let val = app.byte_at(mmap, app.cursor_byte);
                     if val > 0x00 {
                         app.modify(mmap, app.cursor_byte, val - 1);
+                        flush_last(app, mmap, save_fd);
                     }
                 }
                 return;
@@ -1101,8 +1120,25 @@ fn handle_key_event(
         | InputMode::GotoByteInput => {
             handle_input(app, key.code, mmap, th);
         }
-        InputMode::Edit => handle_edit(app, key.code, mmap, th),
+        InputMode::Edit => handle_edit(app, key.code, mmap, th, save_fd),
         InputMode::Normal => handle_normal(app, key.code, mmap, th, max_rows, should_break),
+    }
+}
+
+/// 立即模式：用 pwrite 将单字节写入文件
+fn flush_byte(save_fd: i32, off: usize, val: u8) {
+    if save_fd >= 0 {
+        unsafe { pwrite(save_fd, &val, 1, off as i64) };
+    }
+}
+
+/// 立即模式：flush App.last_modified 到磁盘
+fn flush_last(app: &mut App, mmap: &[u8], save_fd: i32) {
+    if save_fd >= 0 {
+        if let Some(off) = app.last_modified.take() {
+            let val = app.byte_at(mmap, off);
+            flush_byte(save_fd, off, val);
+        }
     }
 }
 
@@ -1165,6 +1201,8 @@ fn run(
     filename: &str,
     track: bool,
     use_inotify: bool,
+    immediate: bool,
+    save_fd: i32,
     lock_mode: LockMode,
     fd: i32,
 ) -> io::Result<bool> {
@@ -1303,6 +1341,7 @@ fn run(
                     filename,
                     th,
                     max_rows,
+                    save_fd,
                     &mut reopen_browser,
                     &mut should_break,
                 );
@@ -1474,7 +1513,7 @@ fn handle_input(app: &mut App, code: KeyCode, mmap: &[u8], th: u16) {
 ///
 /// 所有光标移动后调用 ensure_cursor_visible 防止越界。
 /// 额外 clamp 确保 cursor_byte 在文件范围内。
-fn handle_edit(app: &mut App, code: KeyCode, mmap: &[u8], th: u16) {
+fn handle_edit(app: &mut App, code: KeyCode, mmap: &[u8], th: u16, save_fd: i32) {
     match code {
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
@@ -1567,12 +1606,14 @@ fn handle_edit(app: &mut App, code: KeyCode, mmap: &[u8], th: u16) {
         KeyCode::Enter => {
             if app.mode == DisplayMode::Ascii {
                 app.edit_char(mmap, '\n');
+                flush_last(app, mmap, save_fd);
             }
             app.ensure_cursor_visible(th);
         }
         KeyCode::Tab => {
             if app.mode == DisplayMode::Ascii {
                 app.edit_char(mmap, '\t');
+                flush_last(app, mmap, save_fd);
             }
             app.ensure_cursor_visible(th);
         }
@@ -1580,9 +1621,11 @@ fn handle_edit(app: &mut App, code: KeyCode, mmap: &[u8], th: u16) {
             if app.mode == DisplayMode::Hex {
                 if c.is_ascii_hexdigit() {
                     app.edit_hex(mmap, c);
+                    flush_last(app, mmap, save_fd);
                 }
             } else {
                 app.edit_char(mmap, c);
+                flush_last(app, mmap, save_fd);
             }
             app.ensure_cursor_visible(th);
         }

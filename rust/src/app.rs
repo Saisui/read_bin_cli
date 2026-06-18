@@ -96,6 +96,8 @@ pub struct App {
     pub undo_stack: Vec<UndoEntry>,
     pub redo_stack: Vec<UndoEntry>,
     pub overlay: std::collections::HashMap<usize, u8>,
+    /// 最后一次修改的偏移量（立即模式 flush 用）
+    pub last_modified: Option<usize>,
     pub modified: crate::modified::ModifiedMap,
     pub original_values: std::collections::HashMap<usize, u8>,
     pub pending_ctrl_k: bool,
@@ -143,6 +145,7 @@ impl App {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             overlay: std::collections::HashMap::new(),
+            last_modified: None,
             modified: crate::modified::ModifiedMap::new(),
             original_values: std::collections::HashMap::new(),
             pending_ctrl_k: false,
@@ -386,6 +389,7 @@ impl App {
             self.overlay.insert(off, val);
             self.dirty = true;
             self.modified.mark(off);
+            self.last_modified = Some(off);
         }
     }
 
@@ -407,13 +411,15 @@ impl App {
     pub fn undo(&mut self, mmap: &[u8]) {
         if let Some(e) = self.undo_stack.pop() {
             if e.offset < self.file_size {
-                if mmap[e.offset] == e.old {
-                    self.overlay.remove(&e.offset);
+                let off = e.offset;
+                if mmap[off] == e.old {
+                    self.overlay.remove(&off);
                 } else {
-                    self.overlay.insert(e.offset, e.old);
+                    self.overlay.insert(off, e.old);
                 }
                 self.redo_stack.push(e);
                 self.dirty = !self.undo_stack.is_empty() || !self.overlay.is_empty();
+                self.last_modified = Some(off);
             }
         }
     }
@@ -422,9 +428,11 @@ impl App {
     pub fn redo(&mut self, _mmap: &[u8]) {
         if let Some(e) = self.redo_stack.pop() {
             if e.offset < self.file_size {
-                self.overlay.insert(e.offset, e.new);
+                let off = e.offset;
+                self.overlay.insert(off, e.new);
                 self.undo_stack.push(e);
                 self.dirty = true;
+                self.last_modified = Some(off);
             }
         }
     }
