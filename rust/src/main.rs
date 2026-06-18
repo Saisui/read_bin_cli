@@ -875,8 +875,8 @@ fn handle_key_event(
                 return;
             }
             KeyCode::Char('q') => {
-                // 退出（有修改弹确认）
-                if app.dirty {
+                // 退出（立即模式已写盘，跳过确认；否则有修改弹确认）
+                if app.dirty && !app.flag_immediate {
                     app.input_mode = InputMode::SaveConfirm;
                     app.save_selected = true;
                 } else {
@@ -1850,7 +1850,7 @@ fn handle_normal(
     }
     match code {
         KeyCode::Char('q') => {
-            if app.dirty {
+            if app.dirty && !app.flag_immediate {
                 app.input_mode = InputMode::SaveConfirm;
                 app.save_selected = true;
             } else {
