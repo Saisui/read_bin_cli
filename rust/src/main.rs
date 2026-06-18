@@ -2663,23 +2663,62 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
 
 /// 绘制主视图（hex/ascii/utf8 内容区）
 /// 绘制顶栏（文件名 + 大小）和主视图
-/// 文件名过长时截断：保留扩展名，中间用 ... 省略
+/// 文件名过长时截断：保留扩展名，中间用 ... 省略（安全处理多字节字符）
 ///
 /// 例："very_long_filename_example.txt" (max=20) → "very_lo...ple.txt"
 fn truncate_filename(name: &str, max: usize) -> String {
-    if name.len() <= max {
+    // 按终端显示宽度计算（CJK 字符占 2 列）
+    let chars: Vec<char> = name.chars().collect();
+    let total_width: usize = chars.iter().map(|c| utf8::display_width(*c)).sum();
+    if total_width <= max {
         return name.to_string();
     }
-    // 找扩展名
-    let ext = name.rfind('.').map(|i| &name[i..]).unwrap_or("");
-    let stem = &name[..name.len() - ext.len()];
-    let keep = max.saturating_sub(ext.len() + 3); // 3 = "..."
+    // 找扩展名（最后一个 '.'）
+    let ext_start = chars.iter().rposition(|&c| c == '.').unwrap_or(chars.len());
+    let ext: String = chars[ext_start..].iter().collect();
+    let stem: &[char] = &chars[..ext_start];
+    let ext_width: usize = ext.chars().map(|c| utf8::display_width(c)).sum();
+    let keep = max.saturating_sub(ext_width + 3); // 3 = "..."
     if keep < 2 {
-        return name[..max].to_string();
+        // 截断到 max 宽度
+        let mut s = String::new();
+        let mut w = 0;
+        for c in chars {
+            let cw = utf8::display_width(c);
+            if w + cw > max {
+                break;
+            }
+            s.push(c);
+            w += cw;
+        }
+        return s;
     }
-    let head = keep / 2;
-    let tail = keep - head;
-    format!("{}...{}{}", &stem[..head], &stem[stem.len() - tail..], ext)
+    // 从头部取 keep/2 宽度，从尾部取剩余
+    let head_target = keep / 2;
+    let tail_target = keep - head_target;
+    let mut head_str = String::new();
+    let mut w = 0;
+    for c in stem.iter() {
+        let cw = utf8::display_width(*c);
+        if w + cw > head_target {
+            break;
+        }
+        head_str.push(*c);
+        w += cw;
+    }
+    let mut tail_chars = Vec::new();
+    let mut w = 0;
+    for c in stem.iter().rev() {
+        let cw = utf8::display_width(*c);
+        if w + cw > tail_target {
+            break;
+        }
+        tail_chars.push(*c);
+        w += cw;
+    }
+    tail_chars.reverse();
+    let tail_str: String = tail_chars.into_iter().collect();
+    format!("{}...{}{}", head_str, tail_str, ext)
 }
 
 fn draw_hex(f: &mut ratatui::Frame, app: &App, mmap: &[u8], area: Rect) {
