@@ -8,9 +8,13 @@ edition = "2021"
 ratatui = "0.29"
 crossterm = "0.28"
 memmap2 = "0.9"
+libc = "0.2"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3"
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+inotify = "0.10"
 
 [profile.release]
 opt-level = "s"

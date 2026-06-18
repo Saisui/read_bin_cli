@@ -62,6 +62,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use memmap2::Mmap;
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use inotify::{Inotify, WatchMask};
 use ratatui::{
     backend::CrosstermBackend,
     layout::Rect,
@@ -82,7 +85,8 @@ use app::{App, DisplayMode, InputMode};
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let dump = args.iter().any(|a| a == "--dump");
-    let track = args.iter().any(|a| a == "--track");
+    let track = args.iter().any(|a| a == "--track" || a == "--inotify");
+    let use_inotify = args.iter().any(|a| a == "--inotify");
     let copy_mode = args.iter().any(|a| a == "--copy");
     let lock_mode = args
         .windows(2)
@@ -247,6 +251,7 @@ fn main() -> io::Result<()> {
                 &mmap,
                 &filename,
                 track,
+                use_inotify,
                 lock_mode,
                 file.as_raw_fd(),
             );
@@ -1094,6 +1099,57 @@ fn handle_key_event(
     }
 }
 
+/// 跟踪模式事件轮询
+///
+/// Linux/Android: inotify 事件驱动（0 延迟），或 50ms 轮询。
+/// 其他平台: 50ms 轮询。
+/// 返回 Some(Event) 表示终端事件，None 表示超时（调用方检查文件变化）。
+fn poll_track_event(
+    #[cfg(any(target_os = "linux", target_os = "android"))] inotify: Option<&Inotify>,
+    track_meta: &Option<(std::time::SystemTime, u64)>,
+    filename: &str,
+) -> io::Result<Option<Event>> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Some(inot) = inotify {
+        let inot_fd = inot.as_raw_fd();
+        let mut pollfds = [
+            libc::pollfd {
+                fd: 0,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: inot_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let ret = unsafe { libc::poll(pollfds.as_mut_ptr(), 2, -1) };
+        if ret < 0 {
+            return Ok(None);
+        }
+        // inotify 事件 → 文件变化
+        if pollfds[1].revents & libc::POLLIN != 0 {
+            let mut buf = [0u8; 4096];
+            let _ =
+                unsafe { libc::read(inot_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            return Ok(None);
+        }
+        // stdin 可读 → crossterm 事件
+        if pollfds[0].revents & libc::POLLIN != 0 {
+            return Ok(Some(event::read()?));
+        }
+        return Ok(None);
+    }
+
+    // 轮询模式（所有平台）
+    if event::poll(std::time::Duration::from_millis(50))? {
+        Ok(Some(event::read()?))
+    } else {
+        Ok(None)
+    }
+}
+
 /// 主事件循环：渲染 → 处理输入 → 重复
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -1101,6 +1157,7 @@ fn run(
     mmap: &[u8],
     filename: &str,
     track: bool,
+    use_inotify: bool,
     lock_mode: LockMode,
     fd: i32,
 ) -> io::Result<bool> {
@@ -1110,14 +1167,32 @@ fn run(
     let mut should_break = false;
     let mut file_changed = false;
 
-    // 跟踪模式：记录文件初始状态
-    let track_meta: Option<(std::time::SystemTime, u64)> = if track {
+    // 跟踪模式：记录文件初始状态（轮询用）
+    let track_meta: Option<(std::time::SystemTime, u64)> = if track && !use_inotify {
         std::fs::metadata(filename)
             .ok()
             .and_then(|m| Some((m.modified().ok()?, m.len())))
     } else {
         None
     };
+
+    // inotify 事件驱动：监听文件修改
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let mut inotify_opt: Option<Inotify> = None;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if use_inotify {
+        if let Ok(mut inot) = Inotify::init() {
+            if inot
+                .add_watch(
+                    std::path::Path::new(filename),
+                    WatchMask::MODIFY | WatchMask::MOVE_SELF | WatchMask::DELETE_SELF,
+                )
+                .is_ok()
+            {
+                inotify_opt = Some(inot);
+            }
+        }
+    }
 
     // 4K 锁：记录当前锁定的页
     let mut locked_page: usize = app.cursor_byte / 4096;
@@ -1158,23 +1233,36 @@ fn run(
         // render
         render_frame(terminal, app, mmap)?;
 
-        // handle input（跟踪模式：50ms 轮询，20次/秒检测文件变化）
+        // handle input
         let evt = if track {
-            if event::poll(std::time::Duration::from_millis(50))? {
-                event::read()?
-            } else {
-                // 超时：检查文件变化
-                if let Some((ref old_mtime, old_size)) = track_meta {
-                    if let Ok(m) = std::fs::metadata(filename) {
-                        let new_size = m.len();
-                        let new_mtime = m.modified().unwrap_or(*old_mtime);
-                        if new_size != old_size || new_mtime != *old_mtime {
-                            file_changed = true;
-                            should_break = true;
+            match poll_track_event(
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                inotify_opt.as_ref(),
+                &track_meta,
+                filename,
+            )? {
+                Some(ev) => ev,
+                None => {
+                    // inotify 或轮询检测到文件变化
+                    #[cfg(any(target_os = "linux", target_os = "android"))]
+                    if inotify_opt.is_some() {
+                        file_changed = true;
+                        should_break = true;
+                        continue;
+                    }
+                    // 轮询超时 → 检查文件变化
+                    if let Some((ref old_mtime, old_size)) = track_meta {
+                        if let Ok(m) = std::fs::metadata(filename) {
+                            if m.len() != old_size
+                                || m.modified().unwrap_or(*old_mtime) != *old_mtime
+                            {
+                                file_changed = true;
+                                should_break = true;
+                            }
                         }
                     }
+                    continue;
                 }
-                continue;
             }
         } else {
             event::read()?
