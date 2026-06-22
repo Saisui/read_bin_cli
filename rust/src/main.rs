@@ -18,34 +18,87 @@ mod utf8;
 
 use std::fs::{File, OpenOptions};
 use std::io;
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
-/// flock(2) / fcntl(2) / pwrite(2) 系统调用
+// flock(2) / fcntl(2) / pwrite(2) 系统调用（仅 Unix）
+#[cfg(unix)]
 extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     fn pwrite(fd: i32, buf: *const u8, count: usize, offset: i64) -> isize;
 }
-const LOCK_SH: i32 = 1; // 共享锁（允许多个读者，阻止写者）
-const LOCK_EX: i32 = 2; // 独占锁（阻止所有其他访问）
-const LOCK_UN: i32 = 8; // 解锁
-const F_SETLK: i32 = 6; // fcntl 设置锁（非阻塞）
+#[cfg(unix)] const LOCK_SH: i32 = 1;
+#[cfg(unix)] const LOCK_EX: i32 = 2;
+#[cfg(unix)] const LOCK_UN: i32 = 8;
+#[cfg(unix)] const F_SETLK: i32 = 6;
 
-/// fcntl 文件锁结构体（POSIX struct flock）
+/// Windows API：文件监控
+///
+/// 使用 ReadDirectoryChangesW 监听目录变化，WaitForSingleObject 等待事件。
+/// 与 Linux inotify 对应，实现跨平台事件驱动文件跟踪。
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn CreateFileW(
+        lpFileName: *const u16,
+        dwDesiredAccess: u32,
+        dwShareMode: u32,
+        lpSecurityAttributes: *const u8,
+        dwCreationDisposition: u32,
+        dwFlagsAndAttributes: u32,
+        hTemplateFile: *const u8,
+    ) -> *mut u8;
+    fn ReadDirectoryChangesW(
+        hDirectory: *mut u8,
+        lpBuffer: *mut u8,
+        nBufferLength: u32,
+        bWatchSubtree: i32,
+        dwNotifyFilter: u32,
+        lpBytesReturned: *mut u32,
+        lpOverlapped: *const u8,
+        lpCompletionRoutine: *const u8,
+    ) -> i32;
+    fn WaitForSingleObject(hHandle: *mut u8, dwMilliseconds: u32) -> u32;
+    fn CloseHandle(hObject: *mut u8) -> i32;
+    fn GetStdHandle(nStdHandle: u32) -> *mut u8;
+}
+#[cfg(target_os = "windows")]
+const INVALID_HANDLE_VALUE: *mut u8 = -1isize as *mut u8;
+#[cfg(target_os = "windows")]
+const FILE_LIST_DIRECTORY: u32 = 0x00000100;
+#[cfg(target_os = "windows")]
+const FILE_NOTIFY_CHANGE_FILE_NAME: u32 = 0x00000010;
+#[cfg(target_os = "windows")]
+const FILE_NOTIFY_CHANGE_DIR_NAME: u32 = 0x00000001;
+#[cfg(target_os = "windows")]
+const FILE_NOTIFY_CHANGE_SIZE: u32 = 0x00000008;
+#[cfg(target_os = "windows")]
+const FILE_NOTIFY_CHANGE_LAST_WRITE: u32 = 0x00000010;
+#[cfg(target_os = "windows")]
+const OPEN_EXISTING: u32 = 3;
+#[cfg(target_os = "windows")]
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
+#[cfg(target_os = "windows")]
+const STD_INPUT_HANDLE: u32 = -10i32 as u32;
+#[cfg(target_os = "windows")]
+const INFINITE: u32 = 0xFFFFFFFF;
+
+// fcntl 文件锁结构体（仅 Unix）
+#[cfg(unix)]
 #[repr(C)]
 struct Flock {
-    l_type: i16,   // F_RDLCK / F_WRLCK / F_UNLCK
-    l_whence: i16, // SEEK_SET / SEEK_CUR / SEEK_END
-    l_start: i64,  // 锁起始偏移
-    l_len: i64,    // 锁长度（0 = 到文件末尾）
-    l_pid: i32,    // 拥有者 PID（仅 F_GETLK 返回）
+    l_type: i16,
+    l_whence: i16,
+    l_start: i64,
+    l_len: i64,
+    l_pid: i32,
 }
-const F_RDLCK: i16 = 0; // 读锁
-const F_WRLCK: i16 = 1; // 写锁
-const F_UNLCK: i16 = 2; // 解锁
+#[cfg(unix)] const F_RDLCK: i16 = 0;
+#[cfg(unix)] const F_WRLCK: i16 = 1;
+#[cfg(unix)] const F_UNLCK: i16 = 2;
 
 /// 锁模式
 #[derive(Clone, Copy, PartialEq)]
@@ -110,7 +163,7 @@ OPTIONS:
   --dump              Plain text hex dump (no TUI)
   --copy              Snapshot via temp file (external changes invisible)
   --track             Poll file changes every 50ms
-  --inotify           Inotify event-driven tracking (Linux/Android)
+  --inotify           Event-driven file tracking (Linux/Android/Windows)
   --immediate, --imm  Write-through: flush edits to disk immediately
   --lock none         No lock (default)
   --lock 4k           fcntl range lock on current 4K page
@@ -123,7 +176,7 @@ OPTIONS:
 EXAMPLES:
   read-bin data.bin                   Open file
   read-bin data.bin --copy --lock 4k  Snapshot + 4K lock
-  read-bin log.bin --inotify          Inotify tracking
+  read-bin log.bin --inotify          Event-driven file tracking
   read-bin data.bin --immediate       Edit writes to disk instantly",
             ver = env!("CARGO_PKG_VERSION")
         );
@@ -207,7 +260,8 @@ EXAMPLES:
                     *guard = Some(tmp.to_string_lossy().to_string());
                 }
             }
-            // --lock：加文件锁
+            // --lock：加文件锁（仅 Unix，Windows 暂不支持）
+            #[cfg(unix)]
             if !dump {
                 match lock_mode {
                     LockMode::Full => {
@@ -317,7 +371,9 @@ EXAMPLES:
                 LockMode::None => "",
             };
             // 立即模式：打开写入 fd（File 必须保持存活，否则 fd 被关闭）
-            let _save_file;
+            #[cfg(unix)]
+            let mut _save_file: Option<File> = None;
+            #[cfg(unix)]
             let save_fd = if immediate && !dump {
                 match OpenOptions::new().write(true).open(&filename) {
                     Ok(f) => {
@@ -331,6 +387,10 @@ EXAMPLES:
                 _save_file = None;
                 -1
             };
+            #[cfg(not(unix))]
+            let save_fd = -1i32;
+            #[cfg(not(unix))]
+            let _save_file: Option<File> = None;
             let reopen = run(
                 &mut terminal,
                 &mut app,
@@ -341,7 +401,10 @@ EXAMPLES:
                 immediate,
                 save_fd,
                 lock_mode,
+                #[cfg(unix)]
                 file.as_raw_fd(),
+                #[cfg(not(unix))]
+                -1i32,
             );
 
             match reopen {
@@ -1316,14 +1379,18 @@ fn handle_key_event(
     }
 }
 
-/// 立即模式：用 pwrite 将单字节写入文件
+/// 立即模式：用 pwrite 将单字节写入文件（Windows 上 save_fd=-1 不执行）
+#[cfg(unix)]
 fn flush_byte(save_fd: i32, off: usize, val: u8) {
     if save_fd >= 0 {
         unsafe { pwrite(save_fd, &val, 1, off as i64) };
     }
 }
 
-/// 立即模式：flush App.last_modified 到磁盘
+/// 立即模式：flush App.last_modified 到磁盘（非 Unix 不执行）
+#[cfg(not(unix))]
+fn flush_last(_app: &mut App, _mmap: &[u8], _save_fd: i32) {}
+#[cfg(unix)]
 fn flush_last(app: &mut App, mmap: &[u8], save_fd: i32) {
     if save_fd >= 0 {
         if let Some(off) = app.last_modified.take() {
@@ -1335,11 +1402,16 @@ fn flush_last(app: &mut App, mmap: &[u8], save_fd: i32) {
 
 /// 跟踪模式事件轮询
 ///
-/// Linux/Android: inotify 事件驱动（0 延迟），或 50ms 轮询。
-/// 其他平台: 50ms 轮询。
+/// 平台事件驱动文件跟踪
+///
+/// - Linux/Android: inotify + libc::poll（0 延迟）
+/// - Windows: ReadDirectoryChangesW + WaitForSingleObject
+/// - 其他平台: 50ms 轮询
+///
 /// 返回 Some(Event) 表示终端事件，None 表示超时（调用方检查文件变化）。
 fn poll_track_event(
     #[cfg(any(target_os = "linux", target_os = "android"))] inotify: Option<&Inotify>,
+    #[cfg(target_os = "windows")] dir_handle: Option<*mut u8>,
     track_meta: &Option<(std::time::SystemTime, u64)>,
     filename: &str,
 ) -> io::Result<Option<Event>> {
@@ -1372,6 +1444,25 @@ fn poll_track_event(
         // stdin 可读 → crossterm 事件
         if pollfds[0].revents & libc::POLLIN != 0 {
             return Ok(Some(event::read()?));
+        }
+        return Ok(None);
+    }
+
+    // Windows: ReadDirectoryChangesW 事件驱动
+    #[cfg(target_os = "windows")]
+    if let Some(dh) = dir_handle {
+        let stdin = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        let handles = [stdin, dh];
+        let ret = unsafe { WaitForSingleObject(handles[0], 100) };
+        if ret == 0 {
+            // stdin 可读 → crossterm 事件
+            return Ok(Some(event::read()?));
+        }
+        // 检查目录句柄是否有事件
+        let ret2 = unsafe { WaitForSingleObject(handles[1], 0) };
+        if ret2 == 0 {
+            // 文件变化
+            return Ok(None);
         }
         return Ok(None);
     }
@@ -1430,6 +1521,35 @@ fn run(
         }
     }
 
+    // Windows: ReadDirectoryChangesW 事件驱动
+    #[cfg(target_os = "windows")]
+    let mut win_dir_handle: Option<*mut u8> = None;
+    #[cfg(target_os = "windows")]
+    if use_inotify {
+        // 获取文件所在目录
+        if let Some(parent) = std::path::Path::new(filename).parent() {
+            let dir_wide: Vec<u16> = parent
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let dh = unsafe {
+                CreateFileW(
+                    dir_wide.as_ptr(),
+                    FILE_LIST_DIRECTORY,
+                    0x00000001 | 0x00000002, // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS,
+                    std::ptr::null(),
+                )
+            };
+            if dh != INVALID_HANDLE_VALUE {
+                win_dir_handle = Some(dh);
+            }
+        }
+    }
+
     // 4K 锁：记录当前锁定的页
     let mut locked_page: usize = app.cursor_byte / 4096;
 
@@ -1474,6 +1594,8 @@ fn run(
             match poll_track_event(
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 inotify_opt.as_ref(),
+                #[cfg(target_os = "windows")]
+                win_dir_handle,
                 &track_meta,
                 filename,
             )? {
@@ -1482,6 +1604,13 @@ fn run(
                     // inotify 或轮询检测到文件变化
                     #[cfg(any(target_os = "linux", target_os = "android"))]
                     if inotify_opt.is_some() {
+                        file_changed = true;
+                        should_break = true;
+                        continue;
+                    }
+                    // Windows: ReadDirectoryChangesW 检测到文件变化
+                    #[cfg(target_os = "windows")]
+                    if win_dir_handle.is_some() {
                         file_changed = true;
                         should_break = true;
                         continue;
@@ -1556,6 +1685,32 @@ fn run(
             }
         }
 
+        // Windows: 运行时动态开启 ReadDirectoryChangesW
+        #[cfg(target_os = "windows")]
+        if app.flag_inotify && win_dir_handle.is_none() {
+            if let Some(parent) = std::path::Path::new(filename).parent() {
+                let dir_wide: Vec<u16> = parent
+                    .to_string_lossy()
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let dh = unsafe {
+                    CreateFileW(
+                        dir_wide.as_ptr(),
+                        FILE_LIST_DIRECTORY,
+                        0x00000001 | 0x00000002,
+                        std::ptr::null(),
+                        OPEN_EXISTING,
+                        FILE_FLAG_BACKUP_SEMANTICS,
+                        std::ptr::null(),
+                    )
+                };
+                if dh != INVALID_HANDLE_VALUE {
+                    win_dir_handle = Some(dh);
+                }
+            }
+        }
+
         // lock：运行时切换锁模式
         {
             let new_lock = match app.flag_lock {
@@ -1564,7 +1719,8 @@ fn run(
                 _ => LockMode::None,
             };
             if new_lock != lock_mode {
-                // 释放旧锁
+                // 释放旧锁（仅 Unix）
+                #[cfg(unix)]
                 match lock_mode {
                     LockMode::Full => {
                         unsafe { flock(fd, LOCK_UN) };
@@ -1581,7 +1737,8 @@ fn run(
                     }
                     LockMode::None => {}
                 }
-                // 加新锁
+                // 加新锁（仅 Unix）
+                #[cfg(unix)]
                 match new_lock {
                     LockMode::Full => {
                         unsafe { flock(fd, LOCK_SH) };
@@ -1605,6 +1762,7 @@ fn run(
         }
 
         // 立即模式：运行时动态开启时，打开写入 fd
+        #[cfg(unix)]
         if app.flag_immediate && save_fd < 0 {
             if let Ok(f) = OpenOptions::new().write(true).open(filename) {
                 save_fd = f.as_raw_fd();
@@ -1612,7 +1770,8 @@ fn run(
             }
         }
 
-        // 4K 锁：光标移动到不同页时，更新 range lock
+        // 4K 锁：光标移动到不同页时，更新 range lock（仅 Unix）
+        #[cfg(unix)]
         if lock_mode == LockMode::Page4K {
             let new_page = app.cursor_byte / 4096;
             if new_page != locked_page {
@@ -1638,6 +1797,13 @@ fn run(
             }
         }
     }
+
+    // Windows: 清理目录监控句柄
+    #[cfg(target_os = "windows")]
+    if let Some(dh) = win_dir_handle {
+        unsafe { CloseHandle(dh); }
+    }
+
     Ok(reopen_browser || app.pending_file.is_some() || file_changed)
 }
 
@@ -3921,7 +4087,7 @@ fn draw_mode_menu_dropdown(f: &mut ratatui::Frame, app: &App, area: Rect) {
 
     let items: [(bool, &str, bool); 4] = [
         (app.flag_track, "Track", true),
-        (app.flag_inotify, "Inotify", true),
+        (app.flag_inotify, "FileWatch", true),
         (app.flag_immediate, "Immediate", true),
         (app.flag_copy, "Copy", false),
     ];
