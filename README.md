@@ -24,7 +24,7 @@ read-bin [file] [options]
 | `--dump` | Plain text hex dump to stdout (no TUI) |
 | `--copy` | Snapshot via temp file — external changes invisible |
 | `--track` | Poll file for external changes every 50ms |
-| `--inotify` | Inotify event-driven tracking (Linux/Android) |
+| `--inotify` | Event-driven file tracking (Linux/Android/Windows) |
 | `--immediate`, `--imm` | Write-through: flush every edit to disk immediately |
 | `--lock none` | No file lock (default) |
 | `--lock 4k` | fcntl range lock on current 4K page |
@@ -159,6 +159,8 @@ Toggle with `n` key (cycles through all modes) or select in the mode dropdown.
 | rgb | Bit-decomposed RGB: RR_GGGG_BB (2:4:2 bits) |
 
 All color modes use auto-adaptive foreground (black or white based on background luminance).
+
+**Note**: Selecting a color mode sets it (does not toggle off). Use "off" to disable color modes.
 
 ## Cross-Page Scrolling
 

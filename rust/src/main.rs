@@ -574,88 +574,74 @@ fn handle_mouse_event(
                             app.is_rgbbit_bg = false;
                         }
                         5 => {
-                            // 256: radio behavior
-                            app.is_color256 = !app.is_color256;
-                            if app.is_color256 {
-                                app.is_rgb_bg = false;
-                                app.is_hsl_bg = false;
-                                app.is_gray_bg = false;
-                                app.is_heat_bg = false;
-                                app.is_hslbit_bg = false;
-                                app.is_rgbbit_bg = false;
-                            }
+                            // 256: set (not toggle)
+                            app.is_color256 = true;
+                            app.is_rgb_bg = false;
+                            app.is_hsl_bg = false;
+                            app.is_gray_bg = false;
+                            app.is_heat_bg = false;
+                            app.is_hslbit_bg = false;
+                            app.is_rgbbit_bg = false;
                         }
                         6 => {
-                            // RGB: radio behavior
-                            app.is_rgb_bg = !app.is_rgb_bg;
-                            if app.is_rgb_bg {
-                                app.is_color256 = false;
-                                app.is_hsl_bg = false;
-                                app.is_gray_bg = false;
-                                app.is_heat_bg = false;
-                                app.is_hslbit_bg = false;
-                                app.is_rgbbit_bg = false;
-                            }
+                            // RGB: set (not toggle)
+                            app.is_rgb_bg = true;
+                            app.is_color256 = false;
+                            app.is_hsl_bg = false;
+                            app.is_gray_bg = false;
+                            app.is_heat_bg = false;
+                            app.is_hslbit_bg = false;
+                            app.is_rgbbit_bg = false;
                         }
                         7 => {
-                            // HSL: radio behavior
-                            app.is_hsl_bg = !app.is_hsl_bg;
-                            if app.is_hsl_bg {
-                                app.is_color256 = false;
-                                app.is_rgb_bg = false;
-                                app.is_gray_bg = false;
-                                app.is_heat_bg = false;
-                                app.is_hslbit_bg = false;
-                                app.is_rgbbit_bg = false;
-                            }
+                            // HSL: set (not toggle)
+                            app.is_hsl_bg = true;
+                            app.is_color256 = false;
+                            app.is_rgb_bg = false;
+                            app.is_gray_bg = false;
+                            app.is_heat_bg = false;
+                            app.is_hslbit_bg = false;
+                            app.is_rgbbit_bg = false;
                         }
                         8 => {
-                            // GRAY: radio behavior
-                            app.is_gray_bg = !app.is_gray_bg;
-                            if app.is_gray_bg {
-                                app.is_color256 = false;
-                                app.is_rgb_bg = false;
-                                app.is_hsl_bg = false;
-                                app.is_heat_bg = false;
-                                app.is_hslbit_bg = false;
-                                app.is_rgbbit_bg = false;
-                            }
+                            // GRAY: set (not toggle)
+                            app.is_gray_bg = true;
+                            app.is_color256 = false;
+                            app.is_rgb_bg = false;
+                            app.is_hsl_bg = false;
+                            app.is_heat_bg = false;
+                            app.is_hslbit_bg = false;
+                            app.is_rgbbit_bg = false;
                         }
                         9 => {
-                            // HEAT: radio behavior
-                            app.is_heat_bg = !app.is_heat_bg;
-                            if app.is_heat_bg {
-                                app.is_color256 = false;
-                                app.is_rgb_bg = false;
-                                app.is_hsl_bg = false;
-                                app.is_gray_bg = false;
-                                app.is_hslbit_bg = false;
-                                app.is_rgbbit_bg = false;
-                            }
+                            // HEAT: set (not toggle)
+                            app.is_heat_bg = true;
+                            app.is_color256 = false;
+                            app.is_rgb_bg = false;
+                            app.is_hsl_bg = false;
+                            app.is_gray_bg = false;
+                            app.is_hslbit_bg = false;
+                            app.is_rgbbit_bg = false;
                         }
                         10 => {
-                            // hsl: radio behavior
-                            app.is_hslbit_bg = !app.is_hslbit_bg;
-                            if app.is_hslbit_bg {
-                                app.is_color256 = false;
-                                app.is_rgb_bg = false;
-                                app.is_hsl_bg = false;
-                                app.is_gray_bg = false;
-                                app.is_heat_bg = false;
-                                app.is_rgbbit_bg = false;
-                            }
+                            // hsl: set (not toggle)
+                            app.is_hslbit_bg = true;
+                            app.is_color256 = false;
+                            app.is_rgb_bg = false;
+                            app.is_hsl_bg = false;
+                            app.is_gray_bg = false;
+                            app.is_heat_bg = false;
+                            app.is_rgbbit_bg = false;
                         }
                         11 => {
-                            // rgb: radio behavior
-                            app.is_rgbbit_bg = !app.is_rgbbit_bg;
-                            if app.is_rgbbit_bg {
-                                app.is_color256 = false;
-                                app.is_rgb_bg = false;
-                                app.is_hsl_bg = false;
-                                app.is_gray_bg = false;
-                                app.is_heat_bg = false;
-                                app.is_hslbit_bg = false;
-                            }
+                            // rgb: set (not toggle)
+                            app.is_rgbbit_bg = true;
+                            app.is_color256 = false;
+                            app.is_rgb_bg = false;
+                            app.is_hsl_bg = false;
+                            app.is_gray_bg = false;
+                            app.is_heat_bg = false;
+                            app.is_hslbit_bg = false;
                         }
                         _ => {}
                     }
@@ -1279,88 +1265,74 @@ fn handle_key_event(
                 app.input_mode = InputMode::Normal;
             }
             KeyCode::Char('4') => {
-                // 256: radio behavior
-                app.is_color256 = !app.is_color256;
-                if app.is_color256 {
-                    app.is_rgb_bg = false;
-                    app.is_hsl_bg = false;
-                    app.is_gray_bg = false;
-                    app.is_heat_bg = false;
-                    app.is_hslbit_bg = false;
-                    app.is_rgbbit_bg = false;
-                }
+                // 256: set (not toggle)
+                app.is_color256 = true;
+                app.is_rgb_bg = false;
+                app.is_hsl_bg = false;
+                app.is_gray_bg = false;
+                app.is_heat_bg = false;
+                app.is_hslbit_bg = false;
+                app.is_rgbbit_bg = false;
             }
             KeyCode::Char('5') => {
-                // RGB: radio behavior
-                app.is_rgb_bg = !app.is_rgb_bg;
-                if app.is_rgb_bg {
-                    app.is_color256 = false;
-                    app.is_hsl_bg = false;
-                    app.is_gray_bg = false;
-                    app.is_heat_bg = false;
-                    app.is_hslbit_bg = false;
-                    app.is_rgbbit_bg = false;
-                }
+                // RGB: set (not toggle)
+                app.is_rgb_bg = true;
+                app.is_color256 = false;
+                app.is_hsl_bg = false;
+                app.is_gray_bg = false;
+                app.is_heat_bg = false;
+                app.is_hslbit_bg = false;
+                app.is_rgbbit_bg = false;
             }
             KeyCode::Char('6') => {
-                // HSL: radio behavior
-                app.is_hsl_bg = !app.is_hsl_bg;
-                if app.is_hsl_bg {
-                    app.is_color256 = false;
-                    app.is_rgb_bg = false;
-                    app.is_gray_bg = false;
-                    app.is_heat_bg = false;
-                    app.is_hslbit_bg = false;
-                    app.is_rgbbit_bg = false;
-                }
+                // HSL: set (not toggle)
+                app.is_hsl_bg = true;
+                app.is_color256 = false;
+                app.is_rgb_bg = false;
+                app.is_gray_bg = false;
+                app.is_heat_bg = false;
+                app.is_hslbit_bg = false;
+                app.is_rgbbit_bg = false;
             }
             KeyCode::Char('7') => {
-                // GRAY: radio behavior
-                app.is_gray_bg = !app.is_gray_bg;
-                if app.is_gray_bg {
-                    app.is_color256 = false;
-                    app.is_rgb_bg = false;
-                    app.is_hsl_bg = false;
-                    app.is_heat_bg = false;
-                    app.is_hslbit_bg = false;
-                    app.is_rgbbit_bg = false;
-                }
+                // GRAY: set (not toggle)
+                app.is_gray_bg = true;
+                app.is_color256 = false;
+                app.is_rgb_bg = false;
+                app.is_hsl_bg = false;
+                app.is_heat_bg = false;
+                app.is_hslbit_bg = false;
+                app.is_rgbbit_bg = false;
             }
             KeyCode::Char('8') => {
-                // HEAT: radio behavior
-                app.is_heat_bg = !app.is_heat_bg;
-                if app.is_heat_bg {
-                    app.is_color256 = false;
-                    app.is_rgb_bg = false;
-                    app.is_hsl_bg = false;
-                    app.is_gray_bg = false;
-                    app.is_hslbit_bg = false;
-                    app.is_rgbbit_bg = false;
-                }
+                // HEAT: set (not toggle)
+                app.is_heat_bg = true;
+                app.is_color256 = false;
+                app.is_rgb_bg = false;
+                app.is_hsl_bg = false;
+                app.is_gray_bg = false;
+                app.is_hslbit_bg = false;
+                app.is_rgbbit_bg = false;
             }
             KeyCode::Char('9') => {
-                // hsl: radio behavior
-                app.is_hslbit_bg = !app.is_hslbit_bg;
-                if app.is_hslbit_bg {
-                    app.is_color256 = false;
-                    app.is_rgb_bg = false;
-                    app.is_hsl_bg = false;
-                    app.is_gray_bg = false;
-                    app.is_heat_bg = false;
-                    app.is_rgbbit_bg = false;
-                }
+                // hsl: set (not toggle)
+                app.is_hslbit_bg = true;
+                app.is_color256 = false;
+                app.is_rgb_bg = false;
+                app.is_hsl_bg = false;
+                app.is_gray_bg = false;
+                app.is_heat_bg = false;
+                app.is_rgbbit_bg = false;
             }
             KeyCode::Char('0') => {
-                // rgb: radio behavior
-                app.is_rgbbit_bg = !app.is_rgbbit_bg;
-                if app.is_rgbbit_bg {
-                    app.is_color256 = false;
-                    app.is_rgb_bg = false;
-                    app.is_hsl_bg = false;
-                    app.is_gray_bg = false;
-                    app.is_heat_bg = false;
-                    app.is_hslbit_bg = false;
-                }
+                // rgb: set (not toggle)
+                app.is_rgbbit_bg = true;
+                app.is_color256 = false;
+                app.is_rgb_bg = false;
+                app.is_hsl_bg = false;
+                app.is_gray_bg = false;
+                app.is_heat_bg = false;
+                app.is_hslbit_bg = false;
             }
             _ => {}
         },

@@ -74,7 +74,9 @@ overlay (HashMap<u8>) ───┘
 检测外部文件修改，自动重新加载。
 
 - `--track`：50ms 轮询检测文件 mtime 变化（`poll_track_event()`）
-- `--inotify`：inotify 事件驱动检测（Linux/Android，`poll_track_event()`）
+- `--inotify`：事件驱动检测
+  - Linux/Android：inotify + libc::poll
+  - Windows：ReadDirectoryChangesW + WaitForSingleObject
 - `poll_track_event()`：平台特定事件轮询，返回 `bool`（是否需要重载）
 - `last_modified` 字段：记录上次检测的文件修改时间
 
@@ -93,7 +95,7 @@ overlay (HashMap<u8>) ───┘
 ```
 --copy           临时文件快照模式（复制到 temp 目录编辑，保存时写回原文件）
 --track          50ms 轮询跟踪文件变化
---inotify        inotify 事件驱动跟踪
+--inotify        事件驱动跟踪（Linux/Android/Windows）
 --immediate/--imm  每次编辑立即 pwrite 写盘
 --lock none/4k/full  文件锁模式
 --lock-4k        等价 --lock 4k
