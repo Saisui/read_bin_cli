@@ -2767,7 +2767,12 @@ fn resolve_auto_fg(s: Style) -> Style {
 /// 优先级从高到低：cursor > found match > search highlight > selection > edit-dim > base
 fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> Style {
     let s = if app.cursor_focused && app.cursor_byte == off {
-        sp(16)
+        // HEAT 模式下光标为绿色，其他模式为默认光标样式
+        if app.is_heat_bg {
+            Style::default().fg(Color::Black).bg(Color::Rgb(0, 255, 0))
+        } else {
+            sp(16)
+        }
     } else if let Some((ms, me)) = mr {
         if ms <= off && off < me {
             sp(13)
@@ -2785,7 +2790,7 @@ fn resolve(app: &App, off: usize, base: Style, mr: Option<(usize, usize)>) -> St
         } else {
             base
         }
-    } else if app.input_mode == InputMode::Edit && !app.is_gray_bg {
+    } else if app.input_mode == InputMode::Edit && !app.is_gray_bg && !app.is_heat_bg {
         dim_style(base)
     } else {
         base
@@ -3322,20 +3327,25 @@ fn build_lines<'a>(app: &App, mmap: &[u8], area: Rect) -> Vec<Line<'a>> {
                     } else {
                         dim_style(byte_style(b, app.mode))
                     };
+                    let cursor_style = if app.is_heat_bg {
+                        Style::default().fg(Color::Black).bg(Color::Rgb(0, 255, 0))
+                    } else {
+                        sp(16)
+                    };
                     match (app.mode, app.cursor_nibble) {
                         (DisplayMode::Hex, 0) => {
                             let c0: String = d.chars().take(1).collect();
                             let c1: String = d.chars().skip(1).take(1).collect();
-                            spans.push(Span::styled(c0, sp(16)));
+                            spans.push(Span::styled(c0, cursor_style));
                             spans.push(Span::styled(c1, non_cursor_style));
                         }
                         (DisplayMode::Hex, 1) => {
                             let c0: String = d.chars().take(1).collect();
                             let c1: String = d.chars().skip(1).take(1).collect();
                             spans.push(Span::styled(c0, non_cursor_style));
-                            spans.push(Span::styled(c1, sp(16)));
+                            spans.push(Span::styled(c1, cursor_style));
                         }
-                        _ => spans.push(Span::styled(d, sp(16))),
+                        _ => spans.push(Span::styled(d, cursor_style)),
                     }
                     continue;
                 }
