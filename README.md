@@ -6,6 +6,8 @@ Terminal TUI hex viewer / editor written in Rust (v0.1.11).
 
 **Dependencies**: ratatui (TUI framework), crossterm (terminal control), memmap2 (memory-mapped files), arboard (clipboard)
 
+![](assets/read_bin_preview.png)
+
 ### Architecture Highlights
 
 - **mmap + overlay**: Files are memory-mapped (zero-copy, no `to_vec`). Edits are stored in an in-memory `HashMap<usize, u8>` overlay that shadows the mmap — only modified bytes are copied, keeping memory proportional to edit count, not file size.
